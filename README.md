@@ -21,17 +21,20 @@ To run the bot for the first time it needs an .env file with the following varia
 | WORK_DIR       | fullpath to projecr root dir |
 | CONTAINER_NAME | The name that docker will use for the container |
 | BOT_TOKEN      | Telegram bot token taked from BotFather |
-
-You have also to change the ADMINS list in bot.py inserting your admin telegram IDs.
+| ADMINS         | IDs separated by a comma to declare which are the bot's admins |
 
 If you are using a Nvidia GPU remember to install the [NVIDIA Container Toolkit](https://github.com/NVIDIA/nvidia-container-toolkit)
 
 ## Bot commands
-| Command        | Description    |
-| -------------- | -------------- |
-| /setlanguage _<lang>_ | Set the language inside a group or for the direct use. _lang_ has to be in ISO 639-1. |
-| /addgroup | Add a particular group to the list of authorized one to use the AI models, since them are resource consuming tasks. This command is valid if sent inside the group, only bot admins can use it. |
-| /removegroup | Remove a particular group from the list of authorized one. |
+| Command                      | Description                  |
+| ---------------------------- | ---------------------------- |
+| /setlanguage _<lang>_        | Set the language inside a group or for the direct use. _lang_ has to be in ISO 639-1. |
+| /addgroup                    | Add a particular group to the list of authorized one to use the AI models, since them are resource consuming tasks. This command is valid if sent inside the group, only bot admins can use it. |
+| /removegroup                 | Remove a particular group from the list of authorized one. |
+| /adduser _<user_id>_ _<first_name>_ | Allow the user to use the transcription in private. You can reply to a message and the bot will take the _user_id_ and the _first_name_ automatically. |
+| /removeuser _<user_id>_     | Remove the user from the list of allowed one, denying the transcription feature. |
+| /setlimits _<n_messages>_ _<days>_  | Set retaining limits of collected messages. The messages that are older will be permanently deleted. |
+| /summarize _<n_messages>_    | Summarize the last _n_messages_, or reply to the message from which you would like the summary |
 
 ## Libraries Used
 
@@ -39,6 +42,7 @@ If you are using a Nvidia GPU remember to install the [NVIDIA Container Toolkit]
 - **python-telegram-bot**: For handling Telegram interactions.
 - **Whisper**: For audio transcription, supporting multilingual capabilities.
 - **PyTorch**: As a backend for Whisper and other potential machine learning tasks.
+- **python-iso639**: To find the full name from the ISO 639-1 language setted.
 
 ## Supported Languages
 

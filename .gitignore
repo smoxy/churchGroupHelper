@@ -1,0 +1,3 @@
+data/whitelist.json
+.env
+data/whisper/large-v3-turbo.pt

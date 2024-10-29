@@ -1,0 +1,25 @@
+services:
+  churchgroupbot:
+    build: .
+    container_name: ${CONTAINER_NAME}
+    restart: unless-stopped
+    cap_add:
+      - CAP_PERFMON
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['1']
+              capabilities: [gpu]
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - ${WORK_DIR}/data/whisper:/.cache/whisper
+      - ${WORK_DIR}/data/whisper:/root/.cache/whisper
+      - ${WORK_DIR}/data/whitelist.json:/app/whitelist.json
+      - type: tmpfs # Optional: 100MB of memory, reduces SSD/SD Card wear. Here will be stored only the current processed audio file.
+        target: /tmp/cache
+        tmpfs:
+          size: 100000000
+    environment:
+      - TOKEN=${BOT_TOKEN}

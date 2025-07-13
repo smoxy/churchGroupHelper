@@ -20,7 +20,7 @@ RUN pip install --upgrade pip
 RUN pip install torch==2.4.1+cu124 torchaudio==2.4.1+cu124 --index-url https://download.pytorch.org/whl/cu124
 
 # Install other Python dependencies
-RUN pip install python-telegram-bot==21.6 python-dotenv==1.0.1 python-iso639
+RUN pip install "python-telegram-bot[job-queue]==21.6" python-dotenv==1.0.1 python-iso639 geopy
 RUN pip install git+https://github.com/openai/whisper.git
 
 # Copy the bot script into the container

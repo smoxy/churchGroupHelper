@@ -103,4 +103,5 @@ class Transcriber:
             self.model = None
             # Clear GPU memory
             if self.device == 'cuda':
+                logger.info("Clearing GPU memory.")
                 torch.cuda.empty_cache()

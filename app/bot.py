@@ -1,6 +1,7 @@
 import os
 import logging
 from telegram import Update, Bot
+from telegram.constants import ChatAction
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
     filters, ContextTypes
@@ -8,7 +9,7 @@ from telegram.ext import (
 from iso639 import Language
 from database import Database
 from transcription import Transcriber
-from utils import TOKEN, is_admin, TMP_DIR
+from utils import TOKEN, is_admin, TMP_DIR, send_action
 from datetime import datetime
 
 # Enable logging
@@ -94,6 +95,7 @@ async def set_language(update: Update, context: ContextTypes.DEFAULT_TYPE):
         db.update_user_language(user.id, user.first_name, language_code)
         await update.message.reply_text(f'La tua lingua di trascrizione è stata impostata su {language_code}')
 
+@send_action(ChatAction.TYPING)
 async def transcribe_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     chat = update.effective_chat
@@ -170,6 +172,7 @@ async def message_collector(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Clean old messages
         db.clean_old_messages(chat.id)
 
+@send_action(ChatAction.TYPING)
 async def summarize(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
     user = update.effective_user
@@ -376,18 +379,52 @@ async def set_limits(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db.update_group_limits(chat.id, message_limit=message_limit, time_limit=time_limit)
     await update.message.reply_text(f"Limiti aggiornati: {message_limit} messaggi, {time_limit} giorni")
 
+async def settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    If sended in a private chat, asks for a group to manage (list of groups where the user is an admin or a member),
+        then do as for the group settings.
+    
+    if sended in a group, show - in private - the settings of the group:
+    - Language
+    - Message limit
+    - Time limit
+    - Members -> show the list of users recorded in the group | if user_id not in churches(admin_ids) jump this step to -> call edit_user(user_id, church_group_id)
+        - Change the user's language
+        - Remove the user from the group - ADMIN ONLY
+        - Change the user's surname
+        - Change the user's alias
+        - Change the user's birthday
+    """
+    pass
+
+async def edit_user(update: Update, context: ContextTypes.DEFAULT_TYPE, church_group_id=None):
+    """
+    Edit the user's information:
+    - Name          # only add update bottom - from the telegram user's name
+    - Surname       # Sensible data (will be shown only the first letter in public chats)
+    - Alias         # If present, will be shown instead of the name and surname. It is chosen by the user (or an admin, but only if asked by).
+    - Birthday      # Sensitive data (will be shown only the day and month in public chats where it is enabled)
+    - Group_IDs     # List of groups where will be shown the user's birthday (only for admins - an admin can see only the groups where they are admins)
+    - Member_of     # Group where the user is an official church's member (only for admins) (change Member_of is done by the new church's group admin. If the user is already a member of another church, the admins of the old church will be notified and asked to confirm the change)
+    
+    Can be called by the user or an admin. Only the user or the admins can view the user's information.
+
+    """
+    pass
+
 def main():
     application = ApplicationBuilder().token(TOKEN).build()
 
     # Command handlers
     application.add_handler(CommandHandler('start', start))
-    application.add_handler(CommandHandler('setlanguage', set_language))
+    application.add_handler(CommandHandler('setlanguage', set_language))#TODO: move this function to group settings
     application.add_handler(CommandHandler('addgroup', add_group))
     application.add_handler(CommandHandler('removegroup', remove_group))
     application.add_handler(CommandHandler('setlimits', set_limits))
     application.add_handler(CommandHandler('summarize', summarize))
-    application.add_handler(CommandHandler('adduser', add_user))
-    application.add_handler(CommandHandler('removeuser', remove_user))
+    application.add_handler(CommandHandler('adduser', add_user))        #TODO: remove this function - it's not in the purpose of the churchBot
+    application.add_handler(CommandHandler('removeuser', remove_user))  #TODO: remove this function - it's not in the purpose of the churchBot
+    application.add_handler(CommandHandler('settings', settings))
 
     # Message handlers
     application.add_handler(MessageHandler(filters.VOICE | filters.AUDIO | filters.VIDEO_NOTE, transcribe_audio))

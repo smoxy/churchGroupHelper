@@ -3,6 +3,7 @@ import sqlite3
 import threading
 from contextlib import contextmanager
 from datetime import datetime, timedelta
+from geopy.geocoders import Nominatim
 
 # Enable logging
 logConf = logging.basicConfig(
@@ -11,17 +12,21 @@ logConf = logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Nominatim init
+geolocator = Nominatim(user_agent="churchLocatorBot")
+
+# TODO: Passare ad un ORM come SQLAlchemy
 class Database:
     _instance = None
     _lock = threading.Lock()
 
-    def __init__(self, db_file='bot.db'):
+    def __init__(self, db_file='/data/bot.db'):
         self.connection = sqlite3.connect(db_file, check_same_thread=False)
         self.connection.row_factory = sqlite3.Row
         self.create_tables()
 
     @classmethod
-    def get_instance(cls, db_file='bot.db'):
+    def get_instance(cls, db_file='/data/bot.db'):
         with cls._lock:
             if cls._instance is None:
                 cls._instance = cls(db_file)
@@ -30,14 +35,48 @@ class Database:
     def create_tables(self):
         cursor = self.connection.cursor()
 
+        #TODO: make a batch operation that checks birtdhay of the same user_id that are not matching the same date
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER,
+                church_group_id INTEGER,
+                name TEXT,
+                surname TEXT DEFAULT '',
+                username TEXT DEFAULT '',
+                alias TEXT DEFAULT '',
+                birthday DATE,
+                admin_of BLOB,
+                PRIMARY KEY (id, church_group_id),
+                FOREIGN KEY(church_group_id) REFERENCES authorized_groups(group_id)
+            )
+        ''')
+
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS churches (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                admin_ids BLOB,
+                city TEXT,
+                address TEXT DEFAULT '',
+                country TEXT DEFAULT 'it',
+                latitude REAL,
+                longitude REAL,
+                language TEXT DEFAULT 'it',
+                description TEXT DEFAULT ''
+            )
+        ''')
+
+        #TODO: create function to associate a church to a group
+        #TODO: make a batch operation that checks if a group that is associated to a church has a language that is different from the church language, if so, asks group admin to change the language
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS authorized_groups (
                 group_id INTEGER PRIMARY KEY,
                 group_name TEXT,
+                church_id INTEGER,
                 language TEXT DEFAULT 'it',
                 message_limit INTEGER DEFAULT 500,
                 time_limit INTEGER DEFAULT 30,
-                last_cleanup DATETIME
+                last_cleanup DATETIME,
+                FOREIGN KEY(church_id) REFERENCES churches(id)
             )
         ''')
 
@@ -45,7 +84,8 @@ class Database:
             CREATE TABLE IF NOT EXISTS authorized_users (
                 user_id INTEGER PRIMARY KEY,
                 first_name TEXT,
-                language TEXT DEFAULT 'it'
+                language TEXT DEFAULT 'it',
+                FOREIGN KEY(user_id) REFERENCES users(id)
             )
         ''')
 
@@ -85,6 +125,80 @@ class Database:
             raise e
         finally:
             cursor.close()
+
+    # Methods for users
+    def add_user(self, user_id: int, church_group_id: int, name: str, surname: str='', username: str='', alias: str='', birthday=None, admin_of=None):
+        logger.info(f"Adding user '{name}' '{surname}' ({alias}) with birthday '{birthday}' to church group '{church_group_id}'")
+        with self.get_cursor() as cursor:
+            cursor.execute('''
+                INSERT OR IGNORE INTO users (id, name, surname, username, alias, birthday, church_group_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (user_id, name, surname, username, alias, birthday, church_group_id))
+    
+    def remove_user():
+        pass
+
+    # Methods for churches
+    def add_church(self, city, address='', country='it', language='it', latitude=None, longitude=None, description=''):
+        logger.info(f"Adding church '{city}' with address '{address}' in '{country}' ({latitude}, {longitude})")
+        if description:
+            logger.info(f"Description: {description}")
+        if latitude is None or longitude is None:
+            logger.warning("Missing coordinates")
+        with self.get_cursor() as cursor:
+            cursor.execute('''
+                INSERT INTO churches (city, description, address, country, latitude, longitude)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (city, description, address, country, latitude, longitude))
+    
+    def add_church_admin(self, church_id, user_id):
+        with self.get_cursor() as cursor:
+            cursor.execute('''
+                SELECT admin_ids FROM churches WHERE id = ?
+            ''', (church_id,))
+            result = cursor.fetchone()
+            admin_ids = result['admin_ids'] if result else []
+            admin_ids.append(user_id)
+            cursor.execute('''
+                UPDATE churches SET admin_ids = ? WHERE id = ?
+            ''', (admin_ids, church_id))
+    
+    def remove_church_admin(self, church_id, user_id):
+        with self.get_cursor() as cursor:
+            cursor.execute('''
+                SELECT admin_ids FROM churches WHERE id = ?
+            ''', (church_id,))
+            result = cursor.fetchone()
+            admin_ids = result['admin_ids'] if result else []
+            admin_ids.remove(user_id)
+            cursor.execute('''
+                UPDATE churches SET admin_ids = ? WHERE id = ?
+            ''', (admin_ids, church_id))
+    
+    def get_church_admins(self, church_id):
+        with self.get_cursor() as cursor:
+            cursor.execute('''
+                SELECT admin_ids FROM churches WHERE id = ?
+            ''', (church_id,))
+            result = cursor.fetchone()
+            return result['admin_ids'] if result else []
+    
+    def update_church_language(self, church_id, language):
+        with self.get_cursor() as cursor:
+            cursor.execute('''
+                UPDATE churches SET language = ? WHERE id = ?
+            ''', (language, church_id))
+    
+    def get_church_language(self, church_id):
+        with self.get_cursor() as cursor:
+            cursor.execute('SELECT language FROM churches WHERE id = ?', (church_id,))
+            result = cursor.fetchone()
+            return result['language'] if result else None
+    
+    def update_church_location(self, church_id, latitude=None, longitude=None):
+        pass
+        
+
 
     # Methods for authorized groups
     def add_authorized_group(self, group_id, group_name, language='it', message_limit=500, time_limit=30):
@@ -127,7 +241,7 @@ class Database:
 
     # Methods for authorized users
     def add_authorized_user(self, user_id: int, first_name: str, language: str='it'):
-        logger.info(f"Adding user {first_name}@{user_id} with language {language}")
+        logger.info(f"Adding user '{first_name}'@'{user_id}' with language '{language}'")
         with self.get_cursor() as cursor:
             cursor.execute('''
                 INSERT OR IGNORE INTO authorized_users (user_id, first_name, language)
@@ -135,7 +249,7 @@ class Database:
             ''', (user_id, first_name, language))
             
     def update_user_language(self, user_id, first_name, language):
-        logger.info(f"Setting language for user {first_name}@{user_id} to {language}")
+        logger.info(f"Setting language for user '{first_name}'@'{user_id}' to '{language}'")
         with self.get_cursor() as cursor:
             cursor.execute('''
                 UPDATE authorized_users SET first_name = ?, language = ? WHERE user_id = ?

@@ -1,0 +1,9 @@
+SQLAlchemy
+python-telegram-bot[job-queue]==21.6
+python-dotenv==1.0.1
+python-iso639
+geopy
+openai
+torch==2.4.1
+torchaudio==2.4.1
+git+https://github.com/openai/whisper.git

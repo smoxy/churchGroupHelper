@@ -104,7 +104,7 @@ async def transcribe_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
         group_settings = db.get_group_settings(chat.id)
         if not group_settings:
             return
-        language = group_settings['language']
+        language = group_settings.language
         group_id = chat.id
     else:
         language = db.get_user_language(user.id)
@@ -215,15 +215,15 @@ async def summarize(update: Update, context: ContextTypes.DEFAULT_TYPE):
     previous_user_id = None
     # Large blocks of unstructured data (like raw JSON) can confuse the model or lead to poor performance, so we need to structure the data
     for msg in messages_to_summarize:
-        if previous_user_id == None: # First message
-            structured_text += f"{msg['user_id']} at {msg['timestamp']}:\n{msg['message_text']}\n"
-            previous_user_id = msg['user_id']
-        elif msg['user_id'] != previous_user_id: # New user
-            structured_text += f"\n{msg['user_id']} at {msg['timestamp']}:\n{msg['message_text']}\n"
-            previous_user_id = msg['user_id']
-        else: # Same user
-            structured_text += f"{msg['message_text']}\n"
-            previous_user_id = msg['user_id']
+        if previous_user_id is None:  # First message
+            structured_text += f"{msg.user_id} at {msg.timestamp}:\n{msg.message_text}\n"
+            previous_user_id = msg.user_id
+        elif msg.user_id != previous_user_id:  # New user
+            structured_text += f"\n{msg.user_id} at {msg.timestamp}:\n{msg.message_text}\n"
+            previous_user_id = msg.user_id
+        else:  # Same user
+            structured_text += f"{msg.message_text}\n"
+            previous_user_id = msg.user_id
 
     ### OLD DATA STRUCTURE: Instead of passing raw JSON, you could preprocess the data into a cleaner, 
     ## more readable format that is easier for the model to understand

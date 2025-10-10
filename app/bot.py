@@ -192,17 +192,22 @@ async def summarize(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
     language = db.get_group_language(chat.id)
 
+    logger.info(f"Summarize command received from user {user.id} ({user.first_name}) in group {chat.id} ({chat.title})")
+
     if chat.type not in ['group', 'supergroup']:
+        logger.warning(f"Summarize command rejected: not a group (chat type: {chat.type})")
         await update.message.reply_text("Questo comando può essere utilizzato solo nei gruppi.")
         return
 
     # Check if group is authorized
     group_settings = db.get_group_settings(chat.id)
     if not group_settings:
+        logger.warning(f"Summarize command rejected: group {chat.id} not authorized")
         return
 
     # This command must be used as a reply to a message
     if not message.reply_to_message:
+        logger.info("Summarize command rejected: no reply to message")
         await update.message.reply_text(
             "Per favore, rispondi a un messaggio da cui iniziare il riassunto."
         )
@@ -210,10 +215,14 @@ async def summarize(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Get the telegram message ID of the replied message
     start_telegram_message_id = message.reply_to_message.message_id
+    logger.info(f"Starting summary from telegram message ID: {start_telegram_message_id}")
     
     # Get both messages and transcriptions from the database
     all_messages = db.get_messages(chat.id)
+    logger.info(f"Retrieved {len(all_messages)} total messages from database")
+    
     all_transcriptions = db.get_transcriptions(chat.id, since_telegram_message_id=start_telegram_message_id)
+    logger.info(f"Retrieved {len(all_transcriptions)} transcriptions from database")
     
     # Find messages starting from the replied message
     messages_to_summarize = []
@@ -224,11 +233,16 @@ async def summarize(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if start_collecting:
             messages_to_summarize.append(msg)
     
+    logger.info(f"Filtered to {len(messages_to_summarize)} messages from reply point")
+    
     # Combine messages and transcriptions, then sort by timestamp
     all_content = messages_to_summarize + all_transcriptions
     all_content.sort(key=lambda x: x['timestamp'])
+    
+    logger.info(f"Combined timeline: {len(messages_to_summarize)} text messages + {len(all_transcriptions)} transcriptions = {len(all_content)} total items")
 
     if not all_content:
+        logger.warning("No content found to summarize")
         await update.message.reply_text("Non ci sono messaggi da riassumere.")
         return
 
@@ -280,11 +294,25 @@ async def summarize(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Use Ollama Cloud API to get the summary with streaming
     try:
+        # Check if API key is set
+        api_key = os.getenv('OLLAMA_API_KEY')
+        if not api_key:
+            logger.error("OLLAMA_API_KEY not found in environment variables")
+            await update.message.reply_text(
+                "⚠️ Configurazione mancante: OLLAMA_API_KEY non impostata. "
+                "Contatta l'amministratore del bot.",
+                parse_mode='HTML'
+            )
+            return
+        
+        logger.info(f"Starting summary generation for group {chat.id} ({chat.title})")
+        logger.info(f"Summary includes {len(all_content)} items (messages + transcriptions)")
+        
         from ollama import Client
         
         client = Client(
             host="https://ollama.com",
-            headers={'Authorization': 'Bearer ' + os.getenv('OLLAMA_API_KEY')}
+            headers={'Authorization': f'Bearer {api_key}'}
         )
 
         messages_for_llm = [
@@ -300,18 +328,33 @@ async def summarize(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode='HTML'
         )
 
+        logger.info("Sending request to Ollama Cloud API (gpt-oss:20b model)")
+        
         # Stream the response and collect it
         summary = ""
-        for part in client.chat('gpt-oss:20b', messages=messages_for_llm, stream=True):
-            summary += part['message']['content']
+        try:
+            for part in client.chat('gpt-oss:20b', messages=messages_for_llm, stream=True):
+                summary += part['message']['content']
+        except Exception as stream_error:
+            logger.error(f"Error during streaming from Ollama API: {stream_error}")
+            await status_message.delete()
+            await update.message.reply_text(
+                "❌ Errore durante la comunicazione con il servizio AI. Riprova più tardi.",
+                parse_mode='HTML'
+            )
+            return
 
         # Delete the status message
         await status_message.delete()
+        
+        logger.info(f"Summary generated successfully ({len(summary)} characters)")
 
         # Send the complete summary
         if summary:
             # Split long summaries into multiple messages if needed
             summary_chunks = split_message(summary)
+            logger.info(f"Sending summary in {len(summary_chunks)} chunk(s)")
+            
             for i, chunk in enumerate(summary_chunks):
                 if i == 0:
                     await update.message.reply_text(chunk, parse_mode='HTML')
@@ -321,14 +364,23 @@ async def summarize(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         text=chunk,
                         parse_mode='HTML'
                     )
+            
+            logger.info("Summary sent successfully")
         else:
+            logger.warning("Summary generation returned empty content")
             await update.message.reply_text(
                 "Non sono riuscito a generare un riassunto.",
                 parse_mode='HTML'
             )
 
+    except ImportError:
+        logger.error("Failed to import ollama module - package may not be installed")
+        await update.message.reply_text(
+            "⚠️ Errore di configurazione del bot. Contatta l'amministratore.",
+            parse_mode='HTML'
+        )
     except Exception as e:
-        logger.error(f"Error with Ollama API: {e}")
+        logger.error(f"Unexpected error during summary generation: {e}", exc_info=True)
         await update.message.reply_text(
             "Si è verificato un errore durante la generazione del riassunto.",
             parse_mode='HTML'

@@ -1,352 +1,858 @@
+"""
+Database Module with SQLAlchemy ORM
+
+This module provides database connection management, session handling,
+and high-level database operations using SQLAlchemy ORM.
+
+Best practices implemented:
+- Singleton pattern for database instance
+- Session management with context managers
+- Thread-safe operations
+- Proper error handling and logging
+- Separation of concerns (models vs. operations)
+"""
+
 import logging
-import sqlite3
 import threading
 from contextlib import contextmanager
 from datetime import datetime, timedelta
-from geopy.geocoders import Nominatim
+from typing import List, Optional, Dict, Any
+
+from sqlalchemy import create_engine, func, and_, or_
+from sqlalchemy.orm import sessionmaker, scoped_session, Session
+from sqlalchemy.pool import StaticPool
+
+from models import (
+    Base, User, Church, AuthorizedGroup, AuthorizedUser, 
+    Message, Transcription
+)
 
 # Enable logging
-logConf = logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
 logger = logging.getLogger(__name__)
 
-# Nominatim init
-geolocator = Nominatim(user_agent="churchLocatorBot")
 
-# TODO: Passare ad un ORM come SQLAlchemy
 class Database:
+    """
+    Singleton database manager using SQLAlchemy ORM.
+    
+    Provides thread-safe database operations with proper session management.
+    All database operations should go through this class.
+    """
+    
     _instance = None
     _lock = threading.Lock()
 
-    def __init__(self, db_file='/data/bot.db'):
-        self.connection = sqlite3.connect(db_file, check_same_thread=False)
-        self.connection.row_factory = sqlite3.Row
-        self.create_tables()
+    def __init__(self, db_url: str = 'sqlite:////data/bot.db'):
+        """
+        Initialize database connection and create tables.
+        
+        Args:
+            db_url: SQLAlchemy database URL (default: SQLite at /data/bot.db)
+        """
+        # Create engine with appropriate settings
+        if db_url.startswith('sqlite'):
+            # SQLite-specific settings
+            self.engine = create_engine(
+                db_url,
+                connect_args={'check_same_thread': False},
+                poolclass=StaticPool,
+                echo=False  # Set to True for SQL query logging
+            )
+        else:
+            # For other databases (PostgreSQL, MySQL, etc.)
+            self.engine = create_engine(
+                db_url,
+                pool_pre_ping=True,  # Verify connections before using
+                pool_recycle=3600,   # Recycle connections after 1 hour
+                echo=False
+            )
+        
+        # Create session factory
+        session_factory = sessionmaker(bind=self.engine)
+        self.Session = scoped_session(session_factory)
+        
+        # Create all tables
+        self._create_tables()
 
     @classmethod
-    def get_instance(cls, db_file='/data/bot.db'):
+    def get_instance(cls, db_url: str = 'sqlite:////data/bot.db') -> 'Database':
+        """
+        Get or create the singleton database instance.
+        
+        Args:
+            db_url: SQLAlchemy database URL
+            
+        Returns:
+            Database instance
+        """
         with cls._lock:
             if cls._instance is None:
-                cls._instance = cls(db_file)
+                cls._instance = cls(db_url)
         return cls._instance
 
-    def create_tables(self):
-        cursor = self.connection.cursor()
-
-        #TODO: make a batch operation that checks birtdhay of the same user_id that are not matching the same date
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS users (
-                id INTEGER,
-                church_group_id INTEGER,
-                name TEXT,
-                surname TEXT DEFAULT '',
-                username TEXT DEFAULT '',
-                alias TEXT DEFAULT '',
-                birthday DATE,
-                admin_of BLOB,
-                PRIMARY KEY (id, church_group_id),
-                FOREIGN KEY(church_group_id) REFERENCES authorized_groups(group_id)
-            )
-        ''')
-
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS churches (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                admin_ids BLOB,
-                city TEXT,
-                address TEXT DEFAULT '',
-                country TEXT DEFAULT 'it',
-                latitude REAL,
-                longitude REAL,
-                language TEXT DEFAULT 'it',
-                description TEXT DEFAULT ''
-            )
-        ''')
-
-        #TODO: create function to associate a church to a group
-        #TODO: make a batch operation that checks if a group that is associated to a church has a language that is different from the church language, if so, asks group admin to change the language
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS authorized_groups (
-                group_id INTEGER PRIMARY KEY,
-                group_name TEXT,
-                church_id INTEGER,
-                language TEXT DEFAULT 'it',
-                message_limit INTEGER DEFAULT 500,
-                time_limit INTEGER DEFAULT 30,
-                last_cleanup DATETIME,
-                FOREIGN KEY(church_id) REFERENCES churches(id)
-            )
-        ''')
-
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS authorized_users (
-                user_id INTEGER PRIMARY KEY,
-                first_name TEXT,
-                language TEXT DEFAULT 'it',
-                FOREIGN KEY(user_id) REFERENCES users(id)
-            )
-        ''')
-
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS transcriptions (
-                hash TEXT PRIMARY KEY,
-                transcription TEXT,
-                timestamp DATETIME,
-                group_id INTEGER,
-                FOREIGN KEY(group_id) REFERENCES authorized_groups(group_id)
-            )
-        ''')
-
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS messages (
-                message_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                group_id INTEGER,
-                user_id INTEGER,
-                author_name TEXT,
-                message_text TEXT,
-                timestamp DATETIME,
-                FOREIGN KEY(group_id) REFERENCES authorized_groups(group_id)
-            )
-        ''')
-
-        self.connection.commit()
+    def _create_tables(self):
+        """Create all database tables if they don't exist."""
+        Base.metadata.create_all(self.engine)
+        logger.info("Database tables created/verified successfully")
 
     @contextmanager
-    def get_cursor(self):
-        cursor = self.connection.cursor()
+    def get_session(self) -> Session:
+        """
+        Context manager for database sessions.
+        
+        Usage:
+            with db.get_session() as session:
+                # perform database operations
+                session.add(obj)
+        
+        Yields:
+            SQLAlchemy session
+        """
+        session = self.Session()
         try:
-            yield cursor
-            self.connection.commit()
+            yield session
+            session.commit()
         except Exception as e:
-            self.connection.rollback()
-            logger.error(f"Error: {e}")
-            raise e
+            session.rollback()
+            logger.error(f"Database error: {e}", exc_info=True)
+            raise
         finally:
-            cursor.close()
+            session.close()
 
-    # Methods for users
-    def add_user(self, user_id: int, church_group_id: int, name: str, surname: str='', username: str='', alias: str='', birthday=None, admin_of=None):
-        logger.info(f"Adding user '{name}' '{surname}' ({alias}) with birthday '{birthday}' to church group '{church_group_id}'")
-        with self.get_cursor() as cursor:
-            cursor.execute('''
-                INSERT OR IGNORE INTO users (id, name, surname, username, alias, birthday, church_group_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            ''', (user_id, name, surname, username, alias, birthday, church_group_id))
+    # ==================== User Operations ====================
     
-    def remove_user():
-        pass
+    def add_user(
+        self, 
+        user_id: int, 
+        church_group_id: int, 
+        name: str, 
+        surname: str = '', 
+        username: str = '', 
+        alias: str = '', 
+        birthday: Optional[datetime] = None, 
+        admin_of: Optional[List[int]] = None
+    ) -> User:
+        """
+        Add a user to a church group.
+        
+        Args:
+            user_id: Telegram user ID
+            church_group_id: Church group ID the user belongs to
+            name: User's first name
+            surname: User's surname (optional)
+            username: Telegram username (optional)
+            alias: User's alias/nickname (optional)
+            birthday: User's birthday (optional)
+            admin_of: List of group IDs the user is admin of (optional)
+            
+        Returns:
+            Created User object
+        """
+        logger.info(
+            f"Adding user '{name}' '{surname}' ({alias}) with birthday '{birthday}' "
+            f"to church group '{church_group_id}'"
+        )
+        
+        with self.get_session() as session:
+            user = session.query(User).filter_by(
+                id=user_id, 
+                church_group_id=church_group_id
+            ).first()
+            
+            if user:
+                # Update existing user
+                user.name = name
+                user.surname = surname
+                user.username = username
+                user.alias = alias
+                user.birthday = birthday
+                user.admin_of = admin_of
+            else:
+                # Create new user
+                user = User(
+                    id=user_id,
+                    church_group_id=church_group_id,
+                    name=name,
+                    surname=surname,
+                    username=username,
+                    alias=alias,
+                    birthday=birthday,
+                    admin_of=admin_of
+                )
+                session.add(user)
+            
+            session.flush()
+            return user
 
-    # Methods for churches
-    def add_church(self, city, address='', country='it', language='it', latitude=None, longitude=None, description=''):
-        logger.info(f"Adding church '{city}' with address '{address}' in '{country}' ({latitude}, {longitude})")
+    def remove_user(self, user_id: int, church_group_id: int) -> bool:
+        """
+        Remove a user from a church group.
+        
+        Args:
+            user_id: Telegram user ID
+            church_group_id: Church group ID
+            
+        Returns:
+            True if user was removed, False if not found
+        """
+        with self.get_session() as session:
+            user = session.query(User).filter_by(
+                id=user_id, 
+                church_group_id=church_group_id
+            ).first()
+            
+            if user:
+                session.delete(user)
+                logger.info(f"Removed user {user_id} from group {church_group_id}")
+                return True
+            return False
+
+    # ==================== Church Operations ====================
+    
+    def add_church(
+        self, 
+        city: str, 
+        address: str = '', 
+        country: str = 'it', 
+        language: str = 'it', 
+        latitude: Optional[float] = None, 
+        longitude: Optional[float] = None, 
+        description: str = ''
+    ) -> Church:
+        """
+        Add a new church location.
+        
+        Args:
+            city: City name
+            address: Street address
+            country: Country code (default: 'it')
+            language: Language code (default: 'it')
+            latitude: Geographic latitude
+            longitude: Geographic longitude
+            description: Church description
+            
+        Returns:
+            Created Church object
+        """
+        logger.info(
+            f"Adding church '{city}' with address '{address}' "
+            f"in '{country}' ({latitude}, {longitude})"
+        )
         if description:
             logger.info(f"Description: {description}")
         if latitude is None or longitude is None:
             logger.warning("Missing coordinates")
-        with self.get_cursor() as cursor:
-            cursor.execute('''
-                INSERT INTO churches (city, description, address, country, latitude, longitude)
-                VALUES (?, ?, ?, ?, ?, ?)
-            ''', (city, description, address, country, latitude, longitude))
-    
-    def add_church_admin(self, church_id, user_id):
-        with self.get_cursor() as cursor:
-            cursor.execute('''
-                SELECT admin_ids FROM churches WHERE id = ?
-            ''', (church_id,))
-            result = cursor.fetchone()
-            admin_ids = result['admin_ids'] if result else []
-            admin_ids.append(user_id)
-            cursor.execute('''
-                UPDATE churches SET admin_ids = ? WHERE id = ?
-            ''', (admin_ids, church_id))
-    
-    def remove_church_admin(self, church_id, user_id):
-        with self.get_cursor() as cursor:
-            cursor.execute('''
-                SELECT admin_ids FROM churches WHERE id = ?
-            ''', (church_id,))
-            result = cursor.fetchone()
-            admin_ids = result['admin_ids'] if result else []
-            admin_ids.remove(user_id)
-            cursor.execute('''
-                UPDATE churches SET admin_ids = ? WHERE id = ?
-            ''', (admin_ids, church_id))
-    
-    def get_church_admins(self, church_id):
-        with self.get_cursor() as cursor:
-            cursor.execute('''
-                SELECT admin_ids FROM churches WHERE id = ?
-            ''', (church_id,))
-            result = cursor.fetchone()
-            return result['admin_ids'] if result else []
-    
-    def update_church_language(self, church_id, language):
-        with self.get_cursor() as cursor:
-            cursor.execute('''
-                UPDATE churches SET language = ? WHERE id = ?
-            ''', (language, church_id))
-    
-    def get_church_language(self, church_id):
-        with self.get_cursor() as cursor:
-            cursor.execute('SELECT language FROM churches WHERE id = ?', (church_id,))
-            result = cursor.fetchone()
-            return result['language'] if result else None
-    
-    def update_church_location(self, church_id, latitude=None, longitude=None):
-        pass
         
+        with self.get_session() as session:
+            church = Church(
+                city=city,
+                address=address,
+                country=country,
+                language=language,
+                latitude=latitude,
+                longitude=longitude,
+                description=description,
+                admin_ids=[]
+            )
+            session.add(church)
+            session.flush()
+            return church
 
-
-    # Methods for authorized groups
-    def add_authorized_group(self, group_id, group_name, language='it', message_limit=500, time_limit=30):
-        with self.get_cursor() as cursor:
-            cursor.execute('''
-                INSERT OR IGNORE INTO authorized_groups (group_id, group_name, language, message_limit, time_limit)
-                VALUES (?, ?, ?, ?, ?)
-            ''', (group_id, group_name, language, message_limit, time_limit))
-
-    def remove_authorized_group(self, group_id):
-        with self.get_cursor() as cursor:
-            cursor.execute('DELETE FROM authorized_groups WHERE group_id = ?', (group_id,))
-
-    def get_group_settings(self, group_id):
-        with self.get_cursor() as cursor:
-            cursor.execute('SELECT * FROM authorized_groups WHERE group_id = ?', (group_id,))
-            return cursor.fetchone()
+    def add_church_admin(self, church_id: int, user_id: int) -> bool:
+        """
+        Add an admin to a church.
         
-    def get_authorized_groups(self):
-        with self.get_cursor() as cursor:
-            cursor.execute('SELECT group_id FROM authorized_groups')
-            return [gid[0] for gid in cursor.fetchall()]
-
-    def update_group_language(self, group_id, language):
-        with self.get_cursor() as cursor:
-            cursor.execute('''
-                UPDATE authorized_groups SET language = ? WHERE group_id = ?
-            ''', (language, group_id))
-
-    def update_group_limits(self, group_id, message_limit=None, time_limit=None):
-        with self.get_cursor() as cursor:
-            if message_limit is not None:
-                cursor.execute('''
-                    UPDATE authorized_groups SET message_limit = ? WHERE group_id = ?
-                ''', (message_limit, group_id))
-            if time_limit is not None:
-                cursor.execute('''
-                    UPDATE authorized_groups SET time_limit = ? WHERE group_id = ?
-                ''', (time_limit, group_id))
-
-    # Methods for authorized users
-    def add_authorized_user(self, user_id: int, first_name: str, language: str='it'):
-        logger.info(f"Adding user '{first_name}'@'{user_id}' with language '{language}'")
-        with self.get_cursor() as cursor:
-            cursor.execute('''
-                INSERT OR IGNORE INTO authorized_users (user_id, first_name, language)
-                VALUES (?, ?, ?)
-            ''', (user_id, first_name, language))
+        Args:
+            church_id: Church ID
+            user_id: User ID to add as admin
             
-    def update_user_language(self, user_id, first_name, language):
+        Returns:
+            True if successful
+        """
+        with self.get_session() as session:
+            church = session.query(Church).filter_by(id=church_id).first()
+            if not church:
+                logger.warning(f"Church {church_id} not found")
+                return False
+            
+            if church.admin_ids is None:
+                church.admin_ids = []
+            
+            if user_id not in church.admin_ids:
+                church.admin_ids.append(user_id)
+                # Mark the field as modified for JSON column
+                from sqlalchemy.orm.attributes import flag_modified
+                flag_modified(church, 'admin_ids')
+                logger.info(f"Added user {user_id} as admin of church {church_id}")
+            
+            return True
+
+    def remove_church_admin(self, church_id: int, user_id: int) -> bool:
+        """
+        Remove an admin from a church.
+        
+        Args:
+            church_id: Church ID
+            user_id: User ID to remove from admins
+            
+        Returns:
+            True if successful
+        """
+        with self.get_session() as session:
+            church = session.query(Church).filter_by(id=church_id).first()
+            if not church or not church.admin_ids:
+                return False
+            
+            if user_id in church.admin_ids:
+                church.admin_ids.remove(user_id)
+                # Mark the field as modified for JSON column
+                from sqlalchemy.orm.attributes import flag_modified
+                flag_modified(church, 'admin_ids')
+                logger.info(f"Removed user {user_id} as admin from church {church_id}")
+            
+            return True
+
+    def get_church_admins(self, church_id: int) -> List[int]:
+        """
+        Get list of admin user IDs for a church.
+        
+        Args:
+            church_id: Church ID
+            
+        Returns:
+            List of admin user IDs
+        """
+        with self.get_session() as session:
+            church = session.query(Church).filter_by(id=church_id).first()
+            return church.admin_ids if church and church.admin_ids else []
+
+    def update_church_language(self, church_id: int, language: str) -> bool:
+        """
+        Update the language of a church.
+        
+        Args:
+            church_id: Church ID
+            language: New language code
+            
+        Returns:
+            True if successful
+        """
+        with self.get_session() as session:
+            church = session.query(Church).filter_by(id=church_id).first()
+            if church:
+                church.language = language
+                return True
+            return False
+
+    def get_church_language(self, church_id: int) -> Optional[str]:
+        """
+        Get the language of a church.
+        
+        Args:
+            church_id: Church ID
+            
+        Returns:
+            Language code or None
+        """
+        with self.get_session() as session:
+            church = session.query(Church).filter_by(id=church_id).first()
+            return church.language if church else None
+
+    # ==================== Authorized Group Operations ====================
+    
+    def add_authorized_group(
+        self, 
+        group_id: int, 
+        group_name: str, 
+        language: str = 'it', 
+        message_limit: int = 500, 
+        time_limit: int = 30
+    ) -> AuthorizedGroup:
+        """
+        Add an authorized Telegram group.
+        
+        Args:
+            group_id: Telegram group ID
+            group_name: Group name
+            language: Language code (default: 'it')
+            message_limit: Maximum messages to keep (default: 500)
+            time_limit: Days to keep messages (default: 30)
+            
+        Returns:
+            Created or existing AuthorizedGroup object
+        """
+        with self.get_session() as session:
+            group = session.query(AuthorizedGroup).filter_by(group_id=group_id).first()
+            
+            if group:
+                # Update existing group
+                group.group_name = group_name
+                group.language = language
+                group.message_limit = message_limit
+                group.time_limit = time_limit
+            else:
+                # Create new group
+                group = AuthorizedGroup(
+                    group_id=group_id,
+                    group_name=group_name,
+                    language=language,
+                    message_limit=message_limit,
+                    time_limit=time_limit
+                )
+                session.add(group)
+            
+            session.flush()
+            return group
+
+    def remove_authorized_group(self, group_id: int) -> bool:
+        """
+        Remove an authorized group.
+        
+        Args:
+            group_id: Telegram group ID
+            
+        Returns:
+            True if group was removed
+        """
+        with self.get_session() as session:
+            group = session.query(AuthorizedGroup).filter_by(group_id=group_id).first()
+            if group:
+                session.delete(group)
+                logger.info(f"Removed authorized group {group_id}")
+                return True
+            return False
+
+    def get_group_settings(self, group_id: int) -> Optional[Dict[str, Any]]:
+        """
+        Get settings for an authorized group.
+        
+        Args:
+            group_id: Telegram group ID
+            
+        Returns:
+            Dictionary with group settings or None
+        """
+        with self.get_session() as session:
+            group = session.query(AuthorizedGroup).filter_by(group_id=group_id).first()
+            if group:
+                return {
+                    'group_id': group.group_id,
+                    'group_name': group.group_name,
+                    'church_id': group.church_id,
+                    'language': group.language,
+                    'message_limit': group.message_limit,
+                    'time_limit': group.time_limit,
+                    'last_cleanup': group.last_cleanup
+                }
+            return None
+
+    def get_authorized_groups(self) -> List[int]:
+        """
+        Get list of all authorized group IDs.
+        
+        Returns:
+            List of group IDs
+        """
+        with self.get_session() as session:
+            groups = session.query(AuthorizedGroup.group_id).all()
+            return [g[0] for g in groups]
+
+    def update_group_language(self, group_id: int, language: str) -> bool:
+        """
+        Update the language of a group.
+        
+        Args:
+            group_id: Telegram group ID
+            language: New language code
+            
+        Returns:
+            True if successful
+        """
+        with self.get_session() as session:
+            group = session.query(AuthorizedGroup).filter_by(group_id=group_id).first()
+            if group:
+                group.language = language
+                logger.info(f"Updated language for group {group_id} to {language}")
+                return True
+            return False
+
+    def update_group_limits(
+        self, 
+        group_id: int, 
+        message_limit: Optional[int] = None, 
+        time_limit: Optional[int] = None
+    ) -> bool:
+        """
+        Update message and time limits for a group.
+        
+        Args:
+            group_id: Telegram group ID
+            message_limit: New message limit (optional)
+            time_limit: New time limit in days (optional)
+            
+        Returns:
+            True if successful
+        """
+        with self.get_session() as session:
+            group = session.query(AuthorizedGroup).filter_by(group_id=group_id).first()
+            if not group:
+                return False
+            
+            if message_limit is not None:
+                group.message_limit = message_limit
+            if time_limit is not None:
+                group.time_limit = time_limit
+            
+            logger.info(
+                f"Updated limits for group {group_id}: "
+                f"message_limit={message_limit}, time_limit={time_limit}"
+            )
+            return True
+
+    def get_group_language(self, group_id: int) -> Optional[str]:
+        """
+        Get the language of a group.
+        
+        Args:
+            group_id: Telegram group ID
+            
+        Returns:
+            Language code or None
+        """
+        with self.get_session() as session:
+            group = session.query(AuthorizedGroup).filter_by(group_id=group_id).first()
+            return group.language if group else None
+
+    # ==================== Authorized User Operations ====================
+    
+    def add_authorized_user(
+        self, 
+        user_id: int, 
+        first_name: str, 
+        language: str = 'it'
+    ) -> AuthorizedUser:
+        """
+        Add an authorized user for private chats.
+        
+        Args:
+            user_id: Telegram user ID
+            first_name: User's first name
+            language: Language code (default: 'it')
+            
+        Returns:
+            Created or existing AuthorizedUser object
+        """
+        logger.info(f"Adding authorized user '{first_name}'@'{user_id}' with language '{language}'")
+        
+        with self.get_session() as session:
+            user = session.query(AuthorizedUser).filter_by(user_id=user_id).first()
+            
+            if user:
+                # Update existing user
+                user.first_name = first_name
+                user.language = language
+            else:
+                # Create new user
+                user = AuthorizedUser(
+                    user_id=user_id,
+                    first_name=first_name,
+                    language=language
+                )
+                session.add(user)
+            
+            session.flush()
+            return user
+
+    def update_user_language(self, user_id: int, first_name: str, language: str) -> bool:
+        """
+        Update language for an authorized user.
+        
+        Args:
+            user_id: Telegram user ID
+            first_name: User's first name
+            language: New language code
+            
+        Returns:
+            True if successful
+        """
         logger.info(f"Setting language for user '{first_name}'@'{user_id}' to '{language}'")
-        with self.get_cursor() as cursor:
-            cursor.execute('''
-                UPDATE authorized_users SET first_name = ?, language = ? WHERE user_id = ?
-            ''', (first_name, language, user_id))
+        
+        with self.get_session() as session:
+            user = session.query(AuthorizedUser).filter_by(user_id=user_id).first()
+            if user:
+                user.first_name = first_name
+                user.language = language
+                return True
+            else:
+                # Create user if doesn't exist
+                self.add_authorized_user(user_id, first_name, language)
+                return True
 
-    def remove_authorized_user(self, user_id):
-        with self.get_cursor() as cursor:
-            cursor.execute('DELETE FROM authorized_users WHERE user_id = ?', (user_id,))
+    def remove_authorized_user(self, user_id: int) -> bool:
+        """
+        Remove an authorized user.
+        
+        Args:
+            user_id: Telegram user ID
+            
+        Returns:
+            True if user was removed
+        """
+        with self.get_session() as session:
+            user = session.query(AuthorizedUser).filter_by(user_id=user_id).first()
+            if user:
+                session.delete(user)
+                logger.info(f"Removed authorized user {user_id}")
+                return True
+            return False
 
-    def get_authorized_users(self):
-        with self.get_cursor() as cursor:
-            cursor.execute('SELECT * FROM authorized_users')
-            return [uid[0] for uid in cursor.fetchall()]
+    def get_authorized_users(self) -> List[int]:
+        """
+        Get list of all authorized user IDs.
+        
+        Returns:
+            List of user IDs
+        """
+        with self.get_session() as session:
+            users = session.query(AuthorizedUser.user_id).all()
+            return [u[0] for u in users]
 
-    def get_user_language(self, user_id):
-        with self.get_cursor() as cursor:
-            cursor.execute('SELECT language FROM authorized_users WHERE user_id = ?', (user_id,))
-            result = cursor.fetchone()
-            return result['language'] if result else 'it'
+    def get_user_language(self, user_id: int) -> str:
+        """
+        Get the language preference for a user.
+        
+        Args:
+            user_id: Telegram user ID
+            
+        Returns:
+            Language code (default: 'it')
+        """
+        with self.get_session() as session:
+            user = session.query(AuthorizedUser).filter_by(user_id=user_id).first()
+            return user.language if user else 'it'
 
-    # Methods for messages
-    def add_message(self, group_id, user_id, author_name, message_text, timestamp):
+    # ==================== Message Operations ====================
+    
+    def add_message(
+        self, 
+        group_id: Optional[int], 
+        user_id: Optional[int], 
+        author_name: str, 
+        message_text: Optional[str], 
+        timestamp: datetime
+    ) -> Optional[Message]:
+        """
+        Add a message to the database.
+        
+        Args:
+            group_id: Telegram group ID (None for private chats)
+            user_id: Telegram user ID
+            author_name: Author's name
+            message_text: Message content
+            timestamp: Message timestamp
+            
+        Returns:
+            Created Message object or None if group_id is None
+        """
         if group_id is None:
-            return
-        with self.get_cursor() as cursor:
-            cursor.execute('''
-                INSERT INTO messages (group_id, user_id, author_name, message_text, timestamp)
-                VALUES (?, ?, ?, ?, ?)
-            ''', (group_id, user_id, author_name, message_text, timestamp))
+            return None
+        
+        with self.get_session() as session:
+            message = Message(
+                group_id=group_id,
+                user_id=user_id,
+                author_name=author_name,
+                message_text=message_text,
+                timestamp=timestamp
+            )
+            session.add(message)
+            session.flush()
+            return message
 
-    def get_messages(self, group_id, limit=None, since_message_id=None):
-        with self.get_cursor() as cursor:
-            query = 'SELECT * FROM messages WHERE group_id = ?'
-            params = [group_id]
+    def get_messages(
+        self, 
+        group_id: int, 
+        limit: Optional[int] = None, 
+        since_message_id: Optional[int] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Get messages from a group.
+        
+        Args:
+            group_id: Telegram group ID
+            limit: Maximum number of messages to return
+            since_message_id: Get messages starting from this ID
+            
+        Returns:
+            List of message dictionaries
+        """
+        with self.get_session() as session:
+            query = session.query(Message).filter_by(group_id=group_id)
+            
             if since_message_id:
-                query += ' AND message_id >= ?'
-                params.append(since_message_id)
-            query += ' ORDER BY timestamp ASC'
+                query = query.filter(Message.message_id >= since_message_id)
+            
+            query = query.order_by(Message.timestamp.asc())
+            
             if limit:
-                query += ' LIMIT ?'
-                params.append(limit)
-            cursor.execute(query, params)
-            return cursor.fetchall()
+                query = query.limit(limit)
+            
+            messages = query.all()
+            
+            return [
+                {
+                    'message_id': msg.message_id,
+                    'group_id': msg.group_id,
+                    'user_id': msg.user_id,
+                    'author_name': msg.author_name,
+                    'message_text': msg.message_text,
+                    'timestamp': msg.timestamp
+                }
+                for msg in messages
+            ]
 
-    def clean_null_group_messages(self):
-        with self.get_cursor() as cursor:
-            cursor.execute('DELETE FROM messages WHERE group_id IS NULL')
+    def clean_null_group_messages(self) -> int:
+        """
+        Remove messages with null group_id.
+        
+        Returns:
+            Number of messages deleted
+        """
+        with self.get_session() as session:
+            count = session.query(Message).filter(Message.group_id.is_(None)).delete()
+            logger.info(f"Cleaned {count} messages with null group_id")
+            return count
 
-    def clean_old_messages(self, group_id, all_messages: bool=False):
+    def clean_old_messages(self, group_id: int, all_messages: bool = False) -> int:
+        """
+        Clean old messages from a group based on group settings.
+        
+        Args:
+            group_id: Telegram group ID
+            all_messages: If True, delete all messages from the group
+            
+        Returns:
+            Number of messages deleted
+        """
         settings = self.get_group_settings(group_id)
         if not settings:
-            return
+            return 0
+        
         message_limit = settings['message_limit']
         time_limit = settings['time_limit']
-
-        if all_messages:
-            with self.get_cursor() as cursor:
-                cursor.execute('''
-                    DELETE FROM messages WHERE group_id = ?
-                ''', (group_id,))
-        else:
-            with self.get_cursor() as cursor:
-                # Delete messages older than time_limit days
-                time_threshold = datetime.now() - timedelta(days=time_limit)
-                cursor.execute('''
-                    DELETE FROM messages WHERE group_id = ? AND timestamp < ?
-                ''', (group_id, time_threshold))
-
-                # Keep only the last message_limit messages
-                cursor.execute('''
-                    SELECT message_id FROM messages WHERE group_id = ? ORDER BY timestamp DESC LIMIT ? OFFSET ?
-                ''', (group_id, message_limit, message_limit))
-                rows = cursor.fetchall()
-                if rows:
-                    oldest_message_id_to_keep = rows[-1]['message_id']
-                    cursor.execute('''
-                        DELETE FROM messages WHERE group_id = ? AND message_id < ?
-                    ''', (group_id, oldest_message_id_to_keep))
-
-    # Methods for transcriptions
-    def get_transcription(self, audio_hash):
-        with self.get_cursor() as cursor:
-            cursor.execute('SELECT transcription FROM transcriptions WHERE hash = ?', (audio_hash,))
-            result = cursor.fetchone()
-            return result['transcription'] if result else None
-
-    def save_transcription(self, audio_hash, transcription, group_id):
-        with self.get_cursor() as cursor:
-            cursor.execute('''
-                INSERT INTO transcriptions (hash, transcription, timestamp, group_id)
-                VALUES (?, ?, ?, ?)
-            ''', (audio_hash, transcription, datetime.now(), group_id))
-    
-    def clean_old_transcriptions(self, days):
-         with self.get_cursor() as cursor:
+        
+        with self.get_session() as session:
+            if all_messages:
+                count = session.query(Message).filter_by(group_id=group_id).delete()
+                logger.info(f"Deleted all {count} messages from group {group_id}")
+                return count
+            
+            deleted = 0
+            
             # Delete messages older than time_limit days
+            time_threshold = datetime.now() - timedelta(days=time_limit)
+            count = session.query(Message).filter(
+                and_(
+                    Message.group_id == group_id,
+                    Message.timestamp < time_threshold
+                )
+            ).delete()
+            deleted += count
+            
+            # Keep only the last message_limit messages
+            # Get the message_id of the oldest message to keep
+            subquery = session.query(Message.message_id).filter_by(
+                group_id=group_id
+            ).order_by(Message.timestamp.desc()).limit(message_limit).subquery()
+            
+            # Delete messages not in the subquery
+            count = session.query(Message).filter(
+                and_(
+                    Message.group_id == group_id,
+                    ~Message.message_id.in_(subquery)
+                )
+            ).delete(synchronize_session=False)
+            deleted += count
+            
+            if deleted > 0:
+                logger.info(f"Cleaned {deleted} old messages from group {group_id}")
+            
+            # Update last cleanup time
+            group = session.query(AuthorizedGroup).filter_by(group_id=group_id).first()
+            if group:
+                group.last_cleanup = datetime.now()
+            
+            return deleted
+
+    # ==================== Transcription Operations ====================
+    
+    def get_transcription(self, audio_hash: str) -> Optional[str]:
+        """
+        Get a cached transcription by audio hash.
+        
+        Args:
+            audio_hash: Hash of the audio file
+            
+        Returns:
+            Transcription text or None
+        """
+        with self.get_session() as session:
+            transcription = session.query(Transcription).filter_by(hash=audio_hash).first()
+            return transcription.transcription if transcription else None
+
+    def save_transcription(
+        self, 
+        audio_hash: str, 
+        transcription: str, 
+        group_id: Optional[int]
+    ) -> Transcription:
+        """
+        Save a transcription to the cache.
+        
+        Args:
+            audio_hash: Hash of the audio file
+            transcription: Transcription text
+            group_id: Telegram group ID (optional)
+            
+        Returns:
+            Created Transcription object
+        """
+        with self.get_session() as session:
+            trans = Transcription(
+                hash=audio_hash,
+                transcription=transcription,
+                timestamp=datetime.now(),
+                group_id=group_id
+            )
+            session.add(trans)
+            session.flush()
+            return trans
+
+    def clean_old_transcriptions(self, days: int) -> int:
+        """
+        Remove transcriptions older than specified days.
+        
+        Args:
+            days: Number of days to keep transcriptions
+            
+        Returns:
+            Number of transcriptions deleted
+        """
+        with self.get_session() as session:
             time_threshold = datetime.now() - timedelta(days=days)
-            cursor.execute('''
-                DELETE FROM transcriptions WHERE timestamp < ?
-            ''', (time_threshold,))
+            count = session.query(Transcription).filter(
+                Transcription.timestamp < time_threshold
+            ).delete()
+            
+            if count > 0:
+                logger.info(f"Cleaned {count} old transcriptions")
+            
+            return count
+
+    # ==================== Utility Methods ====================
+    
+    def close(self):
+        """Close database connection and cleanup resources."""
+        self.Session.remove()
+        self.engine.dispose()
+        logger.info("Database connection closed")

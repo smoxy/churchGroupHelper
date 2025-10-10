@@ -1,0 +1,22 @@
+# Church Group Helper Bot - Python Dependencies
+
+# Core Bot Framework
+python-telegram-bot[job-queue]==21.6
+
+# Environment Configuration
+python-dotenv==1.0.1
+
+# Database ORM
+sqlalchemy==2.0.36
+
+# Language and Localization
+python-iso639
+
+# Geocoding
+geopy
+
+# AI/ML for Transcription
+# Note: Whisper is installed from git in Dockerfile
+# torch==2.4.1+cu124  # Installed separately with CUDA support
+# torchaudio==2.4.1+cu124  # Installed separately with CUDA support
+# openai-whisper  # Installed from git repo

@@ -1,3 +1,4 @@
-data/whitelist.json
+data/bot.db
 .env
 data/whisper/large-v3-turbo.pt
+.*

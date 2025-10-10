@@ -116,6 +116,7 @@ class Message(Base):
     author_name = Column(String, nullable=False)
     message_text = Column(Text, nullable=True)
     timestamp = Column(DateTime, nullable=False, default=datetime.utcnow)
+    telegram_message_id = Column(Integer, nullable=True)  # Telegram's message ID for creating links
 
     # Relationships
     group = relationship('AuthorizedGroup', back_populates='messages')

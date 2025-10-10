@@ -17,3 +17,6 @@ geopy
 
 # HTTP Client for External Services
 requests==2.32.3
+
+# Ollama API Client
+ollama

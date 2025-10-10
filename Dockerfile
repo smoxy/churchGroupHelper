@@ -17,7 +17,7 @@ RUN apt-get update && \
 RUN pip install --upgrade pip
 
 # Install Python dependencies
-RUN pip install "python-telegram-bot[job-queue]==21.6" python-dotenv==1.0.1 python-iso639 geopy requests==2.32.3
+RUN pip install "python-telegram-bot[job-queue]==21.6" python-dotenv==1.0.1 python-iso639 geopy requests==2.32.3 ollama
 
 # Install SQLAlchemy for ORM
 RUN pip install sqlalchemy==2.0.36

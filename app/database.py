@@ -639,7 +639,8 @@ class Database:
         user_id: Optional[int], 
         author_name: str, 
         message_text: Optional[str], 
-        timestamp: datetime
+        timestamp: datetime,
+        telegram_message_id: Optional[int] = None
     ) -> Optional[Message]:
         """
         Add a message to the database.
@@ -650,6 +651,7 @@ class Database:
             author_name: Author's name
             message_text: Message content
             timestamp: Message timestamp
+            telegram_message_id: Telegram's message ID for creating links
             
         Returns:
             Created Message object or None if group_id is None
@@ -663,7 +665,8 @@ class Database:
                 user_id=user_id,
                 author_name=author_name,
                 message_text=message_text,
-                timestamp=timestamp
+                timestamp=timestamp,
+                telegram_message_id=telegram_message_id
             )
             session.add(message)
             session.flush()
@@ -706,7 +709,8 @@ class Database:
                     'user_id': msg.user_id,
                     'author_name': msg.author_name,
                     'message_text': msg.message_text,
-                    'timestamp': msg.timestamp
+                    'timestamp': msg.timestamp,
+                    'telegram_message_id': msg.telegram_message_id
                 }
                 for msg in messages
             ]

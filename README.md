@@ -7,7 +7,7 @@ This project aims to create a bot that serves as a multi-tool for church group c
 1. **Transcribe audio messages** for easy sharing and documentation of voice messages.
 2. **Schedule messages** for future events or reminders. (TODO)
 3. **Store important notes** or reminders, like messages or birthdays. (TODO)
-4. **Summarize group conversations** from a specific message onward, useful for recapping discussions. (TODO)
+4. **Summarize group conversations** from a specific message onward, useful for recapping discussions using Ollama Cloud API.
 5. **Create and manage polls with a quorum** for voting on key decisions, especially valuable for church council meetings. (TODO)
 
 The bot is designed for easy deployment using Docker Compose. **Now uses an external Whisper ASR service**, reducing resource requirements significantly (from 6GB RAM to ~512MB).
@@ -31,6 +31,7 @@ To run the bot for the first time it needs an .env file with the following varia
 | CONTAINER_NAME | The name that docker will use for the container |
 | BOT_TOKEN      | Telegram bot token taked from BotFather |
 | ADMINS         | IDs separated by a comma to declare which are the bot's admins |
+| OLLAMA_API_KEY | Your Ollama Cloud API key for the summarization feature (get it from https://ollama.com) |
 
 If you are using a Nvidia GPU remember to install the [NVIDIA Container Toolkit](https://github.com/NVIDIA/nvidia-container-toolkit)
 
@@ -43,7 +44,7 @@ If you are using a Nvidia GPU remember to install the [NVIDIA Container Toolkit]
 | /adduser _<user_id>_ _<first_name>_ | Allow the user to use the transcription in private. You can reply to a message and the bot will take the _user_id_ and the _first_name_ automatically. |
 | /removeuser _<user_id>_     | Remove the user from the list of allowed one, denying the transcription feature. |
 | /setlimits _<n_messages>_ _<days>_  | Set retaining limits of collected messages. The messages that are older will be permanently deleted. |
-| /summarize _<n_messages>_    | Summarize the last _n_messages_, or reply to the message from which you would like the summary |
+| /summarize                   | Reply to any message in the group to summarize the conversation from that message onwards. Uses Ollama Cloud with `gpt-oss:20b` model. See [SUMMARIZE_FEATURE.md](SUMMARIZE_FEATURE.md) for details. |
 
 ## Libraries Used
 
@@ -57,7 +58,7 @@ If you are using a Nvidia GPU remember to install the [NVIDIA Container Toolkit]
 
 Currently, the bot's interface is in Italian, but transcription supports all languages available through [Whisper](https://github.com/openai/whisper).
 
-For summarization, which uses [Llama 3.2 3B](https://llamaimodel.com/3b/), eight languages are supported: English, German, French, Italian, Portuguese, Hindi, Spanish, and Thai.
+For summarization, which uses Ollama Cloud's `gpt-oss:20b` model, the AI can understand and respond in multiple languages based on your group's language settings. The summaries will be generated in the language configured for your group using the `/setlanguage` command.
 
-If you’d like to contribute translations or other enhancements, feel free to [reach out](mailto:churchBot@sf-paris.dev).
+If you'd like to contribute translations or other enhancements, feel free to [reach out](mailto:churchBot@sf-paris.dev).
 

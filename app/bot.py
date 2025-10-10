@@ -177,7 +177,8 @@ async def message_collector(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_id=user.id,
             author_name=user.first_name,
             message_text=message.text,
-            timestamp=message.date
+            timestamp=message.date,
+            telegram_message_id=message.message_id
         )
 
         # Clean old messages
@@ -187,7 +188,6 @@ async def message_collector(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def summarize(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
     user = update.effective_user
-    args = context.args
     message = update.message
     language = db.get_group_language(chat.id)
 
@@ -200,97 +200,128 @@ async def summarize(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not group_settings:
         return
 
-    num_messages = None
-    messages_to_summarize = []
-    if args and args[0].isdigit():
-        num_messages = int(args[0])
-        # Get the last num_messages messages
-        messages = db.get_messages(chat.id, limit=num_messages)
-        messages_to_summarize = messages
-    elif message.reply_to_message:
-        # Use messages from the replied message onwards
-        start_message_id = message.reply_to_message.message_id
-        messages = db.get_messages(chat.id, since_message_id=start_message_id)
-        messages_to_summarize = messages
-    else:
+    # This command must be used as a reply to a message
+    if not message.reply_to_message:
         await update.message.reply_text(
-            "Per favore, fornisci un numero di messaggi da riassumere o rispondi a un messaggio da cui iniziare il riassunto."
+            "Per favore, rispondi a un messaggio da cui iniziare il riassunto."
         )
         return
+
+    # Get the telegram message ID of the replied message
+    start_telegram_message_id = message.reply_to_message.message_id
+    
+    # Find the corresponding message in our database
+    messages_to_summarize = []
+    all_messages = db.get_messages(chat.id)
+    
+    # Find messages starting from the replied message
+    start_collecting = False
+    for msg in all_messages:
+        if msg.get('telegram_message_id') == start_telegram_message_id:
+            start_collecting = True
+        if start_collecting:
+            messages_to_summarize.append(msg)
 
     if not messages_to_summarize:
         await update.message.reply_text("Non ci sono messaggi da riassumere.")
         return
 
+    # Build structured conversation with proper context
     structured_text = ""
     previous_user_id = None
-    # Large blocks of unstructured data (like raw JSON) can confuse the model or lead to poor performance, so we need to structure the data
+    
     for msg in messages_to_summarize:
-        if previous_user_id == None: # First message
-            structured_text += f"{msg['user_id']} at {msg['timestamp']}:\n{msg['message_text']}\n"
-            previous_user_id = msg['user_id']
-        elif msg['user_id'] != previous_user_id: # New user
-            structured_text += f"\n{msg['user_id']} at {msg['timestamp']}:\n{msg['message_text']}\n"
-            previous_user_id = msg['user_id']
-        else: # Same user
-            structured_text += f"{msg['message_text']}\n"
-            previous_user_id = msg['user_id']
+        user_id = msg['user_id']
+        author_name = msg['author_name']
+        timestamp = msg['timestamp']
+        message_text = msg['message_text']
+        telegram_msg_id = msg.get('telegram_message_id')
+        
+        # Format timestamp
+        time_str = timestamp.strftime("%H:%M") if isinstance(timestamp, datetime) else str(timestamp)
+        
+        if previous_user_id != user_id:
+            # New user speaking
+            structured_text += f"\n{author_name} (ID: {user_id}) at {time_str}:\n{message_text}\n"
+            previous_user_id = user_id
+        else:
+            # Same user continuing
+            structured_text += f"{message_text}\n"
 
-    ### OLD DATA STRUCTURE: Instead of passing raw JSON, you could preprocess the data into a cleaner, 
-    ## more readable format that is easier for the model to understand
-    ## Prepare the data in the specified JSON format
-    # data = []    
-    # for msg in messages_to_summarize:
-    #     data.append({
-    #         msg['user_id']: [
-    #             msg['timestamp'],
-    #             msg['message_text']
-    #         ]
-    #     })
-    #
-    ## Convert data to JSON string
-    # data_json = json.dumps(data, indent=2, ensure_ascii=False)
-
-    language = Language.match(language).name.capitalize()
-    # Build the prompt for the AI model
+    language_name = Language.match(language).name.capitalize()
+    
+    # Build the prompt for the AI model with improved instructions
     prompt = (
         "You are an assistant tasked with summarizing a group discussion. The summary must:\n"
-        f"- Be written in {language}, following a neutral and objective tone.\n"
+        f"- Be written in {language_name}, following a neutral and objective tone.\n"
         "- Include an organic, flowing narrative that captures the essence of the conversation.\n"
         "- Identify and highlight the most critical moments and decisions by quoting directly from participants.\n"
-        """- The user ID for each message is provided before the message content (e.g., "USER_ID at TIMESTAMP").\n\n"""
-        "To cite and highlight these important contributions, use this format:\n"
-        """<a href="tg://user?id=USER_ID">"Exact quote from the user's message"</a>.\n\n"""
-        
+        "- The user ID and name for each message are provided in the format: 'Name (ID: USER_ID) at TIME'.\n\n"
+        "To cite and highlight important contributions, use this format:\n"
+        '<a href="tg://user?id=USER_ID">"Exact quote from the user\'s message"</a>\n\n'
         "Here is the conversation:\n\n"
-
-        f"""{structured_text}\n\n"""
-
-        "Only the most relevant parts should be quoted. Focus on meaningful contributions that drove"
-        " the discussion forward, and make sure they are cited exactly as written."
+        f"{structured_text}\n\n"
+        "Only the most relevant parts should be quoted. Focus on meaningful contributions that drove "
+        "the discussion forward, and make sure they are cited exactly as written. "
+        "Provide a well-structured summary with clear sections if the conversation covers multiple topics."
     )
-    return
 
-    # Use OpenAI API to get the summary
+    # Use Ollama Cloud API to get the summary with streaming
     try:
-        import openai
-        openai.api_key = os.getenv('OPENAI_API_KEY')
-        response = openai.Completion.create(
-            engine="text-davinci-003",
-            prompt=prompt,
-            max_tokens=500,
-            n=1,
-            stop=None,
-            temperature=0.5,
+        from ollama import Client
+        
+        client = Client(
+            host="https://ollama.com",
+            headers={'Authorization': 'Bearer ' + os.getenv('OLLAMA_API_KEY')}
         )
-        summary = response.choices[0].text.strip()
-    except Exception as e:
-        logger.error(f"Error with OpenAI API: {e}")
-        await update.message.reply_text("Si è verificato un errore durante la generazione del riassunto.", parse_mode='HTML')
-        return
 
-    # Send the summary to the chat
-    await update.message.reply_text(summary)
+        messages_for_llm = [
+            {
+                'role': 'user',
+                'content': prompt,
+            },
+        ]
+
+        # Send initial "generating summary" message
+        status_message = await update.message.reply_text(
+            "🔄 Sto generando il riassunto...",
+            parse_mode='HTML'
+        )
+
+        # Stream the response and collect it
+        summary = ""
+        for part in client.chat('gpt-oss:20b', messages=messages_for_llm, stream=True):
+            summary += part['message']['content']
+
+        # Delete the status message
+        await status_message.delete()
+
+        # Send the complete summary
+        if summary:
+            # Split long summaries into multiple messages if needed
+            summary_chunks = split_message(summary)
+            for i, chunk in enumerate(summary_chunks):
+                if i == 0:
+                    await update.message.reply_text(chunk, parse_mode='HTML')
+                else:
+                    await context.bot.send_message(
+                        chat_id=chat.id,
+                        text=chunk,
+                        parse_mode='HTML'
+                    )
+        else:
+            await update.message.reply_text(
+                "Non sono riuscito a generare un riassunto.",
+                parse_mode='HTML'
+            )
+
+    except Exception as e:
+        logger.error(f"Error with Ollama API: {e}")
+        await update.message.reply_text(
+            "Si è verificato un errore durante la generazione del riassunto.",
+            parse_mode='HTML'
+        )
+        return
 
 async def add_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user

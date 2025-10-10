@@ -70,7 +70,7 @@ class Transcriber:
             # Fallback to Italian if detection fails
             return 'it', {'it': 1.0}
 
-    def transcribe_audio(self, file_path, language: str, group_id: int, user_id: int, author_name: str, timestamp, is_allowed: bool=False) -> tuple:
+    def transcribe_audio(self, file_path, language: str, group_id: int, user_id: int, author_name: str, timestamp, telegram_message_id: int = None, is_allowed: bool=False) -> tuple:
         # Compute hash
         audio_hash = compute_file_hash(file_path, language)
 
@@ -78,14 +78,16 @@ class Transcriber:
         transcription = self.db.get_transcription(audio_hash)
         if transcription:
             logger.info("Transcription found in cache.")
-            # Add the transcription as a message
-            self.db.add_message(
-                group_id=group_id,
-                user_id=user_id,
-                author_name=author_name,
-                message_text=transcription,
-                timestamp=timestamp
-            )
+            # Add the transcription as a message (only for groups - privacy)
+            if group_id:
+                message = self.db.add_message(
+                    group_id=group_id,
+                    user_id=user_id,
+                    author_name=author_name,
+                    message_text=transcription,
+                    timestamp=timestamp,
+                    telegram_message_id=telegram_message_id
+                )
             return transcription, True  # Cached
         elif not is_allowed:
             logger.info("Transcription not allowed.")
@@ -111,16 +113,28 @@ class Transcriber:
                 # Il servizio restituisce il testo direttamente quando output=txt
                 transcription = response.text.strip()
                 
-                # Save transcription to DB
-                self.db.save_transcription(audio_hash, transcription, group_id)
-                # Add the transcription as a message
-                self.db.add_message(
+                # Add the transcription as a message (only for groups - privacy)
+                message_id = None
+                if group_id:
+                    message = self.db.add_message(
+                        group_id=group_id,
+                        user_id=user_id,
+                        author_name=author_name,
+                        message_text=transcription,
+                        timestamp=timestamp,
+                        telegram_message_id=telegram_message_id
+                    )
+                    # Get the message_id for foreign key reference
+                    message_id = message.message_id if message else None
+                
+                # Save transcription to DB with message_id link (privacy: only for groups)
+                self.db.save_transcription(
+                    audio_hash=audio_hash,
+                    transcription=transcription,
                     group_id=group_id,
-                    user_id=user_id,
-                    author_name=author_name,
-                    message_text=transcription,
-                    timestamp=timestamp
+                    message_id=message_id
                 )
+                
                 return transcription, False  # Not cached
                 
         except requests.exceptions.RequestException as e:

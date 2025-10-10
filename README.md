@@ -18,6 +18,9 @@ The bot is designed for easy deployment using Docker Compose. **Now uses an exte
 - ✅ **External Whisper service**: Uses [Whisper ASR Webservice](https://github.com/ahmetoner/whisper-asr-webservice) for efficient transcription
 - ✅ **Smart text splitting**: Respects sentence boundaries when splitting long messages
 - ✅ **Cache system**: Already transcribed audio files are retrieved from cache without re-transcription
+- ✅ **AI-powered summaries**: Generate comprehensive summaries of conversations including both text messages and audio transcriptions
+- ✅ **Smart citations**: Summaries include clickable user mentions for important quotes
+- ✅ **Unified conversation view**: Messages and transcriptions are combined chronologically in summaries
 
 See [EXTERNAL_WHISPER_SERVICE.md](EXTERNAL_WHISPER_SERVICE.md) for setup details and [LONG_MESSAGES_HANDLING.md](LONG_MESSAGES_HANDLING.md) for information about the message splitting feature.
 
@@ -44,14 +47,85 @@ If you are using a Nvidia GPU remember to install the [NVIDIA Container Toolkit]
 | /adduser _<user_id>_ _<first_name>_ | Allow the user to use the transcription in private. You can reply to a message and the bot will take the _user_id_ and the _first_name_ automatically. |
 | /removeuser _<user_id>_     | Remove the user from the list of allowed one, denying the transcription feature. |
 | /setlimits _<n_messages>_ _<days>_  | Set retaining limits of collected messages. The messages that are older will be permanently deleted. |
-| /summarize                   | Reply to any message in the group to summarize the conversation from that message onwards. Uses Ollama Cloud with `gpt-oss:20b` model. See [SUMMARIZE_FEATURE.md](SUMMARIZE_FEATURE.md) for details. |
+| /summarize                   | Reply to any message in the group to summarize the conversation from that message onwards. Includes both text messages and audio transcriptions. Uses Ollama Cloud with `gpt-oss:20b` model for intelligent summaries with citations. |
+
+---
+
+## 📝 Conversation Summaries
+
+The `/summarize` command generates intelligent summaries of group conversations using AI. Here's what makes it special:
+
+### How it works
+
+1. **Reply to any message** in the group with `/summarize`
+2. The bot collects all **messages AND audio transcriptions** from that point onwards
+3. Sends them to Ollama Cloud API (`gpt-oss:20b` model)
+4. Generates a comprehensive summary with:
+   - **Key discussion points** organized in a clear narrative
+   - **Direct quotes** from important contributions
+   - **Clickable user mentions** for easy reference
+   - **Audio transcription context** (marked when relevant)
+
+### 🔒 Privacy Design
+
+The bot implements privacy-by-design principles:
+
+- **Group transcriptions**: Linked to message metadata for summaries
+- **Private transcriptions**: NO user metadata stored (fully private)
+- **Data minimization**: User info (name, ID) stored ONLY in messages table
+- **Foreign key architecture**: Transcriptions reference messages, not duplicate data
+- **Retention policies**: Transcriptions cleaned up before messages (cache first)
+
+### Example Usage
+
+```
+[User A sends a message about planning an event]
+[User B responds with details]
+[User C sends an audio message with additional ideas]
+[User D sends text confirming]
+
+Admin replies to User A's message with: /summarize
+
+Bot generates:
+"The group discussed planning the church event for next month. 
+User A suggested organizing it, and User B provided logistical details.
+User C shared additional ideas via audio message regarding venue options.
+User D confirmed availability and commitment to help."
+```
+
+### Features
+
+- ✨ **Unified conversation view**: Text and audio transcriptions merged chronologically
+- 🎯 **Smart citations**: Important quotes linked to speakers
+- 🌍 **Multilingual**: Summary generated in your group's configured language
+- ⚡ **Real-time streaming**: See the summary being generated live
+- 📊 **Context preservation**: Maintains conversation flow and speaker attribution
+
+### Setup
+
+1. Add `OLLAMA_API_KEY` to your `.env` file (get it from https://ollama.com)
+2. Run database migrations (in order):
+   ```bash
+   # Step 1: Add telegram_message_id to messages table
+   python migrate_add_telegram_message_id.py ./data/bot.db
+   
+   # Step 2: Add message_id foreign key to transcriptions table
+   python migrate_transcription_metadata.py ./data/bot.db
+   ```
+3. Restart the bot
+4. Use `/summarize` in groups by replying to any message
+
+**Note**: Existing transcriptions won't have message links, but new ones will work automatically.
+
+---
 
 ## Libraries Used
 
 - **Python**: 3.12
 - **python-telegram-bot**: For handling Telegram interactions.
 - **Whisper**: For audio transcription, supporting multilingual capabilities.
-- **PyTorch**: As a backend for Whisper and other potential machine learning tasks.
+- **Ollama**: For AI-powered conversation summaries via Ollama Cloud API.
+- **SQLAlchemy**: ORM for database management.
 - **python-iso639**: To find the full name from the ISO 639-1 language setted.
 
 ## Supported Languages

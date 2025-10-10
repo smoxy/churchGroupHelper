@@ -804,19 +804,70 @@ class Database:
             transcription = session.query(Transcription).filter_by(hash=audio_hash).first()
             return transcription.transcription if transcription else None
 
+    def get_transcriptions(
+        self, 
+        group_id: int, 
+        since_telegram_message_id: Optional[int] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Get transcriptions from a group for summarization with metadata from Message table.
+        
+        Privacy: Only returns transcriptions that have an associated message (group messages).
+        Private chat transcriptions are excluded (no message_id).
+        
+        Args:
+            group_id: Telegram group ID
+            since_telegram_message_id: Get transcriptions starting from this message ID
+            
+        Returns:
+            List of transcription dictionaries with metadata from linked messages
+        """
+        with self.get_session() as session:
+            # JOIN Transcription with Message to get user metadata
+            query = session.query(Transcription, Message).join(
+                Message, 
+                Transcription.message_id == Message.message_id
+            ).filter(
+                Transcription.group_id == group_id,
+                Transcription.message_id.isnot(None)  # Only group transcriptions
+            )
+            
+            if since_telegram_message_id:
+                query = query.filter(Message.telegram_message_id >= since_telegram_message_id)
+            
+            query = query.order_by(Message.timestamp.asc())
+            results = query.all()
+            
+            return [
+                {
+                    'user_id': msg.user_id,
+                    'author_name': msg.author_name,
+                    'transcription': trans.transcription,
+                    'timestamp': msg.timestamp,
+                    'telegram_message_id': msg.telegram_message_id,
+                    'is_audio': True  # Flag to identify transcriptions
+                }
+                for trans, msg in results
+            ]
+
     def save_transcription(
         self, 
         audio_hash: str, 
         transcription: str, 
-        group_id: Optional[int]
+        group_id: Optional[int],
+        message_id: Optional[int] = None
     ) -> Transcription:
         """
         Save a transcription to the cache.
         
+        Privacy: Only group transcriptions have message_id (linking to Message table).
+        Private chat transcriptions have no user metadata stored.
+        
         Args:
             audio_hash: Hash of the audio file
             transcription: Transcription text
-            group_id: Telegram group ID (optional)
+            group_id: Telegram group ID (None for private chats)
+            message_id: Foreign key to messages table (None for private chats)
             
         Returns:
             Created Transcription object
@@ -826,7 +877,8 @@ class Database:
                 hash=audio_hash,
                 transcription=transcription,
                 timestamp=datetime.now(),
-                group_id=group_id
+                group_id=group_id,
+                message_id=message_id
             )
             session.add(trans)
             session.flush()

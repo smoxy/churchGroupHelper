@@ -133,6 +133,7 @@ async def transcribe_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_id=user.id,
             author_name=user.first_name,
             timestamp=update.message.date,  # Use the date of the message
+            telegram_message_id=update.message.message_id,
             is_allowed=is_allowed(update)
         )
         if not cached and not is_allowed(update):
@@ -210,19 +211,24 @@ async def summarize(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Get the telegram message ID of the replied message
     start_telegram_message_id = message.reply_to_message.message_id
     
-    # Find the corresponding message in our database
-    messages_to_summarize = []
+    # Get both messages and transcriptions from the database
     all_messages = db.get_messages(chat.id)
+    all_transcriptions = db.get_transcriptions(chat.id, since_telegram_message_id=start_telegram_message_id)
     
     # Find messages starting from the replied message
+    messages_to_summarize = []
     start_collecting = False
     for msg in all_messages:
         if msg.get('telegram_message_id') == start_telegram_message_id:
             start_collecting = True
         if start_collecting:
             messages_to_summarize.append(msg)
+    
+    # Combine messages and transcriptions, then sort by timestamp
+    all_content = messages_to_summarize + all_transcriptions
+    all_content.sort(key=lambda x: x['timestamp'])
 
-    if not messages_to_summarize:
+    if not all_content:
         await update.message.reply_text("Non ci sono messaggi da riassumere.")
         return
 
@@ -230,23 +236,27 @@ async def summarize(update: Update, context: ContextTypes.DEFAULT_TYPE):
     structured_text = ""
     previous_user_id = None
     
-    for msg in messages_to_summarize:
-        user_id = msg['user_id']
-        author_name = msg['author_name']
-        timestamp = msg['timestamp']
-        message_text = msg['message_text']
-        telegram_msg_id = msg.get('telegram_message_id')
+    for item in all_content:
+        user_id = item['user_id']
+        author_name = item['author_name']
+        timestamp = item['timestamp']
+        
+        # Handle both messages and transcriptions
+        if item.get('is_audio'):
+            content = f"[AUDIO TRASCRITTO]: {item['transcription']}"
+        else:
+            content = item['message_text']
         
         # Format timestamp
         time_str = timestamp.strftime("%H:%M") if isinstance(timestamp, datetime) else str(timestamp)
         
         if previous_user_id != user_id:
             # New user speaking
-            structured_text += f"\n{author_name} (ID: {user_id}) at {time_str}:\n{message_text}\n"
+            structured_text += f"\n{author_name} (ID: {user_id}) at {time_str}:\n{content}\n"
             previous_user_id = user_id
         else:
             # Same user continuing
-            structured_text += f"{message_text}\n"
+            structured_text += f"{content}\n"
 
     language_name = Language.match(language).name.capitalize()
     
@@ -256,6 +266,7 @@ async def summarize(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"- Be written in {language_name}, following a neutral and objective tone.\n"
         "- Include an organic, flowing narrative that captures the essence of the conversation.\n"
         "- Identify and highlight the most critical moments and decisions by quoting directly from participants.\n"
+        "- The conversation includes both text messages and audio transcriptions (marked with [AUDIO TRASCRITTO]).\n"
         "- The user ID and name for each message are provided in the format: 'Name (ID: USER_ID) at TIME'.\n\n"
         "To cite and highlight important contributions, use this format:\n"
         '<a href="tg://user?id=USER_ID">"Exact quote from the user\'s message"</a>\n\n'
@@ -263,7 +274,8 @@ async def summarize(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"{structured_text}\n\n"
         "Only the most relevant parts should be quoted. Focus on meaningful contributions that drove "
         "the discussion forward, and make sure they are cited exactly as written. "
-        "Provide a well-structured summary with clear sections if the conversation covers multiple topics."
+        "Provide a well-structured summary with clear sections if the conversation covers multiple topics. "
+        "When summarizing audio transcriptions, indicate that they were voice messages if relevant to the context."
     )
 
     # Use Ollama Cloud API to get the summary with streaming

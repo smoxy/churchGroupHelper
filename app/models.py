@@ -129,6 +129,11 @@ class Transcription(Base):
     """
     Caches audio transcriptions to avoid re-processing the same audio files.
     Uses hash-based identification for duplicate detection.
+    
+    Privacy considerations:
+    - Private chat transcriptions have no message_id (no user metadata stored)
+    - Group transcriptions link to Message table via foreign key
+    - User metadata (user_id, author_name, telegram_message_id) only in Message table
     """
     __tablename__ = 'transcriptions'
 
@@ -136,9 +141,11 @@ class Transcription(Base):
     transcription = Column(Text, nullable=False)
     timestamp = Column(DateTime, nullable=False, default=datetime.utcnow)
     group_id = Column(Integer, ForeignKey('authorized_groups.group_id'), nullable=True)
+    message_id = Column(Integer, ForeignKey('messages.message_id'), nullable=True)  # Link to Message for metadata
 
     # Relationships
     group = relationship('AuthorizedGroup', back_populates='transcriptions')
+    message = relationship('Message', backref='transcription', foreign_keys=[message_id])
 
     def __repr__(self):
-        return f"<Transcription(hash='{self.hash[:8]}...', group_id={self.group_id})>"
+        return f"<Transcription(hash='{self.hash[:8]}...', group_id={self.group_id}, message_id={self.message_id})>"

@@ -9,7 +9,7 @@ from telegram.ext import (
 from iso639 import Language
 from database import Database
 from transcription import Transcriber
-from utils import TOKEN, is_admin, TMP_DIR, send_action
+from utils import TOKEN, is_admin, TMP_DIR, send_action, split_message
 from datetime import datetime
 
 # Enable logging
@@ -139,7 +139,18 @@ async def transcribe_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
             assert transcription==""
             await update.message.reply_text(f"{user.first_name} is not authorized to use this function.")
         else:
-            await update.message.reply_text(f'Trascrizione:\n{transcription}')
+            # Split long transcriptions into multiple messages
+            full_text = f'Trascrizione:\n{transcription}'
+            message_chunks = split_message(full_text)
+            
+            # Send all chunks
+            for i, chunk in enumerate(message_chunks):
+                if i == 0:
+                    # First message replies to the audio
+                    await update.message.reply_text(chunk)
+                else:
+                    # Subsequent messages are sent to the chat
+                    await context.bot.send_message(chat_id=update.effective_chat.id, text=chunk)
     except Exception as e:
         logger.error(f"Error transcribing audio: {e}")
         await update.message.reply_text('Spiacente, si è verificato un errore durante la trascrizione.')

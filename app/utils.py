@@ -31,6 +31,9 @@ if WHISPER_SERVICE_URI:
 else:
     WHISPER_SERVICE_URL = f"http://{WHISPER_SERVICE_HOST}:{WHISPER_SERVICE_PORT}"
 
+# Telegram constraints
+TELEGRAM_MAX_MESSAGE_LENGTH = 4096
+
 # Temporary directory
 TMP_DIR = f'{os.sep}tmp{os.sep}cache'
 
@@ -56,6 +59,72 @@ def get_device():
     """Get the device for torch."""
     import torch
     return 'cuda' if torch.cuda.is_available() else 'cpu'
+
+def split_message(text: str, max_length: int = TELEGRAM_MAX_MESSAGE_LENGTH) -> list:
+    """
+    Split a long text into chunks that fit Telegram's message size limit.
+    Tries to split at sentence boundaries when possible.
+    
+    :param text: The text to split
+    :param max_length: Maximum length per message (default: 4096 for Telegram)
+    :return: List of text chunks
+    """
+    if len(text) <= max_length:
+        return [text]
+    
+    chunks = []
+    current_chunk = ""
+    
+    # Try to split at sentence boundaries (. ! ? followed by space or newline)
+    sentences = []
+    current_sentence = ""
+    
+    for char in text:
+        current_sentence += char
+        if char in '.!?\n' and len(current_sentence) > 1:
+            sentences.append(current_sentence)
+            current_sentence = ""
+    
+    # Add any remaining text as a sentence
+    if current_sentence:
+        sentences.append(current_sentence)
+    
+    # Group sentences into chunks
+    for sentence in sentences:
+        # If a single sentence is longer than max_length, we need to split it
+        if len(sentence) > max_length:
+            # Split long sentence by words
+            words = sentence.split()
+            temp_chunk = ""
+            for word in words:
+                if len(temp_chunk) + len(word) + 1 <= max_length:
+                    temp_chunk += word + " "
+                else:
+                    if temp_chunk:
+                        chunks.append(temp_chunk.strip())
+                    temp_chunk = word + " "
+            if temp_chunk:
+                if current_chunk and len(current_chunk) + len(temp_chunk) <= max_length:
+                    current_chunk += temp_chunk
+                else:
+                    if current_chunk:
+                        chunks.append(current_chunk.strip())
+                    current_chunk = temp_chunk
+        else:
+            # Check if adding this sentence exceeds the limit
+            if len(current_chunk) + len(sentence) <= max_length:
+                current_chunk += sentence
+            else:
+                # Save current chunk and start a new one
+                if current_chunk:
+                    chunks.append(current_chunk.strip())
+                current_chunk = sentence
+    
+    # Add the last chunk if it's not empty
+    if current_chunk:
+        chunks.append(current_chunk.strip())
+    
+    return chunks
 
 def send_action(action):
     """Sends `action` while processing func command."""

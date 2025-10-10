@@ -10,7 +10,16 @@ This project aims to create a bot that serves as a multi-tool for church group c
 4. **Summarize group conversations** from a specific message onward, useful for recapping discussions. (TODO)
 5. **Create and manage polls with a quorum** for voting on key decisions, especially valuable for church council meetings. (TODO)
 
-The bot is designed for easy deployment using Docker Compose. It performs best on a system with a powerful CPU or an NVIDIA GPU (e.g., RTX A2000 6GB). My setup uses CUDA Version 12.6 and Nvidia Driver Version 560; however, feel free to modify the Dockerfile to fit your environment.
+The bot is designed for easy deployment using Docker Compose. **Now uses an external Whisper ASR service**, reducing resource requirements significantly (from 6GB RAM to ~512MB).
+
+### Key Features
+
+- ✅ **Automatic message splitting**: Long transcriptions are automatically split into multiple messages respecting Telegram's 4096 character limit
+- ✅ **External Whisper service**: Uses [Whisper ASR Webservice](https://github.com/ahmetoner/whisper-asr-webservice) for efficient transcription
+- ✅ **Smart text splitting**: Respects sentence boundaries when splitting long messages
+- ✅ **Cache system**: Already transcribed audio files are retrieved from cache without re-transcription
+
+See [EXTERNAL_WHISPER_SERVICE.md](EXTERNAL_WHISPER_SERVICE.md) for setup details and [LONG_MESSAGES_HANDLING.md](LONG_MESSAGES_HANDLING.md) for information about the message splitting feature.
 
 ---
 

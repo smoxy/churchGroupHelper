@@ -20,6 +20,17 @@ TOKEN = os.getenv('TOKEN')
 # Admin IDs
 ADMINS = [int(admin) for admin in os.getenv('ADMINS').split(',')]
 
+# Whisper service configuration
+WHISPER_SERVICE_HOST = os.getenv('WHISPER_SERVICE_HOST', 'whisper')
+WHISPER_SERVICE_PORT = os.getenv('WHISPER_SERVICE_PORT', '9000')
+WHISPER_SERVICE_URI = os.getenv('WHISPER_SERVICE_URI', '')
+
+# Construct base URL for Whisper service
+if WHISPER_SERVICE_URI:
+    WHISPER_SERVICE_URL = f"{WHISPER_SERVICE_URI.rstrip('/')}"
+else:
+    WHISPER_SERVICE_URL = f"http://{WHISPER_SERVICE_HOST}:{WHISPER_SERVICE_PORT}"
+
 # Temporary directory
 TMP_DIR = f'{os.sep}tmp{os.sep}cache'
 

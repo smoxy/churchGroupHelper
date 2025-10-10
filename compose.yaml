@@ -3,24 +3,16 @@ services:
     build: .
     container_name: ${CONTAINER_NAME}
     restart: unless-stopped
-    cap_add:
-      - CAP_PERFMON
     deploy:
       resources:
         limits:
-          cpus: '2.0'
-          memory: 6144M
+          cpus: '1.0'
+          memory: 512M
         reservations:
-          cpus: '0.5'
-          memory: 2048M
-          devices:
-            - driver: nvidia
-              device_ids: ['0']
-              capabilities: [gpu]
+          cpus: '0.25'
+          memory: 256M
     volumes:
       - /etc/localtime:/etc/localtime:ro
-      - ${WORK_DIR}/data/whisper:/.cache/whisper
-      - ${WORK_DIR}/data/whisper:/root/.cache/whisper
       - ${WORK_DIR}/app:/app:ro # Optional: If you want to mount the app folder to edit the code without rebuilding the image. DEBUG ONLY
       - ${WORK_DIR}/data/bot.db:/data/bot.db
       - type: tmpfs # Optional: 100MB of memory, reduces SSD/SD Card wear. Here will be stored only the current processed audio file.
@@ -30,3 +22,6 @@ services:
     environment:
       - TOKEN=${BOT_TOKEN}
       - ADMINS=${ADMINS}
+      - WHISPER_SERVICE_HOST=${WHISPER_SERVICE_HOST}
+      - WHISPER_SERVICE_PORT=${WHISPER_SERVICE_PORT}
+      - WHISPER_SERVICE_URI=${WHISPER_SERVICE_URI}

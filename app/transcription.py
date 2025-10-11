@@ -2,6 +2,7 @@ import os
 from datetime import datetime
 import logging
 import requests
+import time
 from utils import TMP_DIR, compute_file_hash, WHISPER_SERVICE_URL
 from database import Database
 
@@ -93,50 +94,143 @@ class Transcriber:
             logger.info("Transcription not allowed.")
             return "", False
 
-        # Transcribe audio using external service
-        try:
-            url = f"{self.service_url}/asr"
-            
-            with open(file_path, 'rb') as audio_file:
-                files = {'audio_file': audio_file}
-                params = {
-                    'encode': 'true',
-                    'task': 'transcribe',
-                    'language': language,
-                    'output': 'txt'
-                }
+        # Transcribe audio using external service with retry logic
+        # The Whisper container unloads the model from VRAM after 2 minutes of inactivity
+        # It needs time to reload the model when a new request arrives
+        max_retries = 3
+        retry_delay = 3  # seconds between retries
+        url = f"{self.service_url}/asr"
+        
+        for attempt in range(1, max_retries + 1):
+            try:
                 
-                logger.info(f"Sending transcription request to {url}")
-                response = requests.post(url, files=files, params=params, timeout=300)
-                response.raise_for_status()
+                logger.info(f"[Attempt {attempt}/{max_retries}] Sending transcription request to {url} for language '{language}'")
                 
-                # Il servizio restituisce il testo direttamente quando output=txt
-                transcription = response.text.strip()
-                
-                # Add the transcription as a message (only for groups - privacy)
-                message_id = None
-                if group_id:
-                    message = self.db.add_message(
+                with open(file_path, 'rb') as audio_file:
+                    files = {'audio_file': audio_file}
+                    params = {
+                        'encode': 'true',
+                        'task': 'transcribe',
+                        'language': language,
+                        'output': 'txt'
+                    }
+                    
+                    start_time = time.time()
+                    response = requests.post(url, files=files, params=params, timeout=300)
+                    elapsed_time = time.time() - start_time
+                    
+                    logger.info(f"[Attempt {attempt}/{max_retries}] Response received in {elapsed_time:.2f}s - Status code: {response.status_code}")
+                    
+                    response.raise_for_status()
+                    
+                    # Il servizio restituisce il testo direttamente quando output=txt
+                    transcription = response.text.strip()
+                    
+                    logger.info(f"[Attempt {attempt}/{max_retries}] Transcription successful - Length: {len(transcription)} characters")
+                    
+                    # Add the transcription as a message (only for groups - privacy)
+                    message_id = None
+                    if group_id:
+                        message = self.db.add_message(
+                            group_id=group_id,
+                            user_id=user_id,
+                            author_name=author_name,
+                            message_text=transcription,
+                            timestamp=timestamp,
+                            telegram_message_id=telegram_message_id
+                        )
+                        # Get the message_id for foreign key reference
+                        message_id = message.message_id if message else None
+                    
+                    # Save transcription to DB with message_id link (privacy: only for groups)
+                    self.db.save_transcription(
+                        audio_hash=audio_hash,
+                        transcription=transcription,
                         group_id=group_id,
-                        user_id=user_id,
-                        author_name=author_name,
-                        message_text=transcription,
-                        timestamp=timestamp,
-                        telegram_message_id=telegram_message_id
+                        message_id=message_id
                     )
-                    # Get the message_id for foreign key reference
-                    message_id = message.message_id if message else None
+                    
+                    logger.info(f"Transcription saved successfully (audio_hash: {audio_hash})")
+                    return transcription, False  # Not cached
+                    
+            except requests.exceptions.Timeout as e:
+                logger.error(
+                    f"[Attempt {attempt}/{max_retries}] Timeout error during transcription request: {str(e)}\n"
+                    f"  - URL: {url}\n"
+                    f"  - Language: {language}\n"
+                    f"  - Timeout threshold: 300s\n"
+                    f"  - Possible cause: Whisper service overloaded or model loading taking too long"
+                )
+                if attempt < max_retries:
+                    logger.info(f"Waiting {retry_delay}s before retry...")
+                    time.sleep(retry_delay)
+                else:
+                    logger.error(f"All {max_retries} transcription attempts failed due to timeout")
+                    raise
+                    
+            except requests.exceptions.ConnectionError as e:
+                logger.error(
+                    f"[Attempt {attempt}/{max_retries}] Connection error to Whisper service: {str(e)}\n"
+                    f"  - URL: {url}\n"
+                    f"  - Possible causes:\n"
+                    f"    * Whisper service is not running\n"
+                    f"    * Network connectivity issues\n"
+                    f"    * Incorrect WHISPER_SERVICE_URL configuration"
+                )
+                if attempt < max_retries:
+                    logger.info(f"Waiting {retry_delay}s before retry...")
+                    time.sleep(retry_delay)
+                else:
+                    logger.error(f"All {max_retries} transcription attempts failed due to connection error")
+                    raise
+                    
+            except requests.exceptions.HTTPError as e:
+                status_code = e.response.status_code if e.response else "Unknown"
+                response_text = e.response.text[:500] if e.response else "No response body"
                 
-                # Save transcription to DB with message_id link (privacy: only for groups)
-                self.db.save_transcription(
-                    audio_hash=audio_hash,
-                    transcription=transcription,
-                    group_id=group_id,
-                    message_id=message_id
+                logger.error(
+                    f"[Attempt {attempt}/{max_retries}] HTTP error from Whisper service: {str(e)}\n"
+                    f"  - URL: {url}\n"
+                    f"  - Status Code: {status_code}\n"
+                    f"  - Response: {response_text}\n"
+                    f"  - Language requested: {language}\n"
+                    f"  - Possible causes:\n"
+                    f"    * Model still loading into VRAM (if status 503/504)\n"
+                    f"    * Invalid audio format (if status 400)\n"
+                    f"    * Service error (if status 500)"
                 )
                 
-                return transcription, False  # Not cached
-                
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Error during transcription: {e}")
-            raise e
+                # Retry only for 503/504 (service unavailable/timeout) - model might be loading
+                if status_code in [503, 504] and attempt < max_retries:
+                    logger.info(f"Service temporarily unavailable (model loading?). Waiting {retry_delay}s before retry...")
+                    time.sleep(retry_delay)
+                elif attempt < max_retries:
+                    logger.info(f"Waiting {retry_delay}s before retry...")
+                    time.sleep(retry_delay)
+                else:
+                    logger.error(f"All {max_retries} transcription attempts failed with HTTP error {status_code}")
+                    raise
+                    
+            except requests.exceptions.RequestException as e:
+                logger.error(
+                    f"[Attempt {attempt}/{max_retries}] Unexpected request error during transcription: {str(e)}\n"
+                    f"  - URL: {url}\n"
+                    f"  - Language: {language}\n"
+                    f"  - Error type: {type(e).__name__}"
+                )
+                if attempt < max_retries:
+                    logger.info(f"Waiting {retry_delay}s before retry...")
+                    time.sleep(retry_delay)
+                else:
+                    logger.error(f"All {max_retries} transcription attempts failed with unexpected error")
+                    raise
+                    
+            except Exception as e:
+                logger.error(
+                    f"[Attempt {attempt}/{max_retries}] Unexpected non-request error: {str(e)}\n"
+                    f"  - Error type: {type(e).__name__}\n"
+                    f"  - This is likely a code bug, not a service issue",
+                    exc_info=True
+                )
+                # Don't retry on unexpected errors
+                raise

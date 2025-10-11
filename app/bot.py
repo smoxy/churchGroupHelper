@@ -9,6 +9,7 @@ from telegram.ext import (
 from iso639 import Language
 from database import Database
 from transcription import Transcriber
+from summarizer import create_summarizer
 from utils import TOKEN, is_admin, TMP_DIR, send_action, split_message
 from datetime import datetime
 
@@ -187,10 +188,13 @@ async def message_collector(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @send_action(ChatAction.TYPING)
 async def summarize(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Generate a summary of the conversation using LangChain for better prompt adherence.
+    """
     chat = update.effective_chat
     user = update.effective_user
     message = update.message
-    language = db.get_group_language(chat.id)
+    language = db.get_group_language(chat.id) or "it"
 
     logger.info(f"Summarize command received from user {user.id} ({user.first_name}) in group {chat.id} ({chat.title})")
 
@@ -246,82 +250,7 @@ async def summarize(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Non ci sono messaggi da riassumere.")
         return
 
-    # Build structured conversation with proper context
-    structured_text = ""
-    previous_user_id = None
-    
-    for item in all_content:
-        user_id = item['user_id']
-        author_name = item['author_name']
-        timestamp = item['timestamp']
-        telegram_msg_id = item.get('telegram_message_id', 'N/A')
-        
-        # Handle both messages and transcriptions
-        if item.get('is_audio'):
-            content = f"[AUDIO TRASCRITTO]: {item['transcription']}"
-        else:
-            content = item['message_text']
-        
-        # Format timestamp
-        time_str = timestamp.strftime("%H:%M") if isinstance(timestamp, datetime) else str(timestamp)
-        
-        if previous_user_id != user_id:
-            # New user speaking - include telegram message ID for linking
-            structured_text += f"\n{author_name} (ID: {user_id}) at {time_str} [MSG_ID: {telegram_msg_id}]:\n{content}\n"
-            previous_user_id = user_id
-        else:
-            # Same user continuing - also include message ID
-            structured_text += f"[MSG_ID: {telegram_msg_id}]: {content}\n"
-
-    language_name = Language.match(language).name.capitalize()
-    
-    # Build the prompt for the AI model with improved instructions
-    # Note: For group chats, chat_id needs to be converted (remove the -100 prefix for the link)
-    chat_id_for_link = str(chat.id)[4:] if str(chat.id).startswith('-100') else str(chat.id)
-    
-    prompt = (
-        "You are an assistant tasked with creating a CONCISE summary of a Telegram group discussion.\n\n"
-        
-        f"LANGUAGE: Write in {language_name}\n"
-        "FORMAT: Use ONLY HTML tags (NO Markdown syntax like **, *, >, ##, or []())\n"
-        "LENGTH: Maximum 200 words. Be brief and to the point.\n\n"
-        
-        "ALLOWED HTML TAGS:\n"
-        "- <b>text</b> for bold\n"
-        "- <i>text</i> for italic\n"
-        "- <a href=\"URL\">text</a> for links\n"
-        "- Line breaks with \\n\\n (double newline)\n"
-        "- NO lists, NO headers, NO blockquotes, NO other special formatting\n\n"
-        
-        "USER MENTIONS:\n"
-        f'- Format: <a href="tg://user?id=USER_ID">Username</a>\n'
-        f'- Example: <a href="tg://user?id=265699760">Simone</a>\n\n'
-        
-        "MESSAGE LINKS:\n"
-        f'- Format: <a href="https://t.me/c/{chat_id_for_link}/MESSAGE_ID">quoted text</a>\n'
-        f'- Example: <a href="https://t.me/c/{chat_id_for_link}/12345">"Messaggio importante"</a>\n\n'
-        
-        "INSTRUCTIONS:\n"
-        "1. Write a flowing narrative paragraph (NOT a list)\n"
-        "2. Mention only the MOST important points\n"
-        "3. Quote key messages using message links\n"
-        "4. Mention users with user links when relevant\n"
-        "5. If discussion is trivial (just test messages), keep it to 1-2 sentences\n"
-        "6. Audio transcriptions: mention briefly as \"messaggi vocali\" if relevant\n"
-        "7. NO section headers, NO bullet points, NO numbered lists\n"
-        "8. STRICT: Stay under 200 words\n\n"
-        
-        "DATA FORMAT:\n"
-        "Messages show: Name (ID: USER_ID) at TIME [MSG_ID: MESSAGE_ID]\n"
-        "Extract USER_ID and MESSAGE_ID to create links.\n\n"
-        
-        "CONVERSATION:\n"
-        f"{structured_text}\n\n"
-        
-        "Generate a brief, flowing summary in HTML format:"
-    )
-
-    # Use Ollama Cloud API to get the summary with streaming
+    # Use LangChain-based summarizer for better prompt adherence
     try:
         # Check if API key is set
         api_key = os.getenv('OLLAMA_API_KEY')
@@ -337,41 +266,23 @@ async def summarize(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.info(f"Starting summary generation for group {chat.id} ({chat.title})")
         logger.info(f"Summary includes {len(all_content)} items (messages + transcriptions)")
         
-        from ollama import Client
-        
-        client = Client(
-            host="https://ollama.com",
-            headers={'Authorization': f'Bearer {api_key}'}
-        )
-
-        messages_for_llm = [
-            {
-                'role': 'user',
-                'content': prompt,
-            },
-        ]
-
         # Send initial "generating summary" message
         status_message = await update.message.reply_text(
             "🔄 Sto generando il riassunto...",
             parse_mode='HTML'
         )
 
-        logger.info("Sending request to Ollama Cloud API (gpt-oss:120b model)")
+        # Create summarizer instance
+        logger.info("Initializing LangChain summarizer with gpt-oss:120b model")
+        summarizer = create_summarizer(api_key)
         
-        # Stream the response and collect it
-        summary = ""
-        try:
-            for part in client.chat('gpt-oss:120b', messages=messages_for_llm, stream=True):
-                summary += part['message']['content']
-        except Exception as stream_error:
-            logger.error(f"Error during streaming from Ollama API: {stream_error}")
-            await status_message.delete()
-            await update.message.reply_text(
-                "❌ Errore durante la comunicazione con il servizio AI. Riprova più tardi.",
-                parse_mode='HTML'
-            )
-            return
+        # Generate summary using LangChain
+        logger.info("Generating summary with LangChain chain")
+        summary = summarizer.summarize(
+            messages=all_content,
+            chat_id=chat.id,
+            language=language
+        )
 
         # Delete the status message
         await status_message.delete()
@@ -401,8 +312,8 @@ async def summarize(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "Non sono riuscito a generare un riassunto."
             )
 
-    except ImportError:
-        logger.error("Failed to import ollama module - package may not be installed")
+    except ImportError as import_error:
+        logger.error(f"Failed to import required module: {import_error}")
         await update.message.reply_text(
             "⚠️ Errore di configurazione del bot. Contatta l'amministratore.",
             parse_mode='HTML'
@@ -413,7 +324,13 @@ async def summarize(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Si è verificato un errore durante la generazione del riassunto.",
             parse_mode='HTML'
         )
-        return
+        
+        # Clean up status message if it still exists
+        try:
+            if 'status_message' in locals():
+                await status_message.delete()
+        except:
+            pass
 
 async def add_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user

@@ -20,3 +20,8 @@ requests==2.32.3
 
 # Ollama API Client
 ollama
+
+# LangChain for AI orchestration
+langchain==0.3.7
+langchain-community==0.3.5
+langchain-core==0.3.15

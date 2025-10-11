@@ -254,6 +254,7 @@ async def summarize(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = item['user_id']
         author_name = item['author_name']
         timestamp = item['timestamp']
+        telegram_msg_id = item.get('telegram_message_id', 'N/A')
         
         # Handle both messages and transcriptions
         if item.get('is_audio'):
@@ -265,31 +266,58 @@ async def summarize(update: Update, context: ContextTypes.DEFAULT_TYPE):
         time_str = timestamp.strftime("%H:%M") if isinstance(timestamp, datetime) else str(timestamp)
         
         if previous_user_id != user_id:
-            # New user speaking
-            structured_text += f"\n{author_name} (ID: {user_id}) at {time_str}:\n{content}\n"
+            # New user speaking - include telegram message ID for linking
+            structured_text += f"\n{author_name} (ID: {user_id}) at {time_str} [MSG_ID: {telegram_msg_id}]:\n{content}\n"
             previous_user_id = user_id
         else:
-            # Same user continuing
-            structured_text += f"{content}\n"
+            # Same user continuing - also include message ID
+            structured_text += f"[MSG_ID: {telegram_msg_id}]: {content}\n"
 
     language_name = Language.match(language).name.capitalize()
     
     # Build the prompt for the AI model with improved instructions
+    # Note: For group chats, chat_id needs to be converted (remove the -100 prefix for the link)
+    chat_id_for_link = str(chat.id)[4:] if str(chat.id).startswith('-100') else str(chat.id)
+    
     prompt = (
-        "You are an assistant tasked with summarizing a group discussion. The summary must:\n"
+        "You are an assistant tasked with summarizing a Telegram group discussion. The summary must:\n"
         f"- Be written in {language_name}, following a neutral and objective tone.\n"
+        "- Use proper Markdown formatting (NOT HTML).\n"
         "- Include an organic, flowing narrative that captures the essence of the conversation.\n"
         "- Identify and highlight the most critical moments and decisions by quoting directly from participants.\n"
-        "- The conversation includes both text messages and audio transcriptions (marked with [AUDIO TRASCRITTO]).\n"
-        "- The user ID and name for each message are provided in the format: 'Name (ID: USER_ID) at TIME'.\n\n"
-        "To cite and highlight important contributions, use this format:\n"
-        '<a href="tg://user?id=USER_ID">"Exact quote from the user\'s message"</a>\n\n'
+        "- The conversation includes both text messages and audio transcriptions (marked with [AUDIO TRASCRITTO]).\n\n"
+        
+        "**IMPORTANT FORMATTING RULES:**\n"
+        "1. To mention a user, use this Markdown format: [Username](tg://user?id=USER_ID)\n"
+        "   Example: [Simone](tg://user?id=265699760) said something important\n\n"
+        
+        "2. To reference a specific message, use this format: [\"Quoted text\"](https://t.me/c/" + chat_id_for_link + "/MESSAGE_ID)\n"
+        f"   Example: [\"This is important\"](https://t.me/c/{chat_id_for_link}/12345)\n\n"
+        
+        "3. When quoting important contributions, combine both:\n"
+        "   [Username](tg://user?id=USER_ID) wrote: [\"Exact quote\"](https://t.me/c/" + chat_id_for_link + "/MESSAGE_ID)\n\n"
+        
+        "4. Use standard Markdown for formatting:\n"
+        "   - **bold** for emphasis\n"
+        "   - *italic* for secondary emphasis\n"
+        "   - Use bullet points and numbered lists where appropriate\n\n"
+        
+        "**DATA AVAILABLE:**\n"
+        "Each message in the conversation provides:\n"
+        "- Author name and ID in format: 'Name (ID: USER_ID) at TIME'\n"
+        "- The telegram_message_id is available as TELEGRAM_MSG_ID\n"
+        "- Extract USER_ID and TELEGRAM_MSG_ID from the conversation data to create proper links\n\n"
+        
         "Here is the conversation:\n\n"
         f"{structured_text}\n\n"
-        "Only the most relevant parts should be quoted. Focus on meaningful contributions that drove "
-        "the discussion forward, and make sure they are cited exactly as written. "
-        "Provide a well-structured summary with clear sections if the conversation covers multiple topics. "
-        "When summarizing audio transcriptions, indicate that they were voice messages if relevant to the context."
+        
+        "**INSTRUCTIONS:**\n"
+        "- Only quote the most relevant parts that drove the discussion forward\n"
+        "- Use the message links for important quotes so users can jump to the original message\n"
+        "- Use user mention links when referring to people\n"
+        "- Provide a well-structured summary with clear sections if multiple topics are discussed\n"
+        "- When summarizing audio transcriptions, indicate they were voice messages if relevant\n"
+        "- Keep the tone professional but conversational"
     )
 
     # Use Ollama Cloud API to get the summary with streaming
@@ -357,20 +385,19 @@ async def summarize(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             for i, chunk in enumerate(summary_chunks):
                 if i == 0:
-                    await update.message.reply_text(chunk, parse_mode='HTML')
+                    await update.message.reply_text(chunk, parse_mode='Markdown')
                 else:
                     await context.bot.send_message(
                         chat_id=chat.id,
                         text=chunk,
-                        parse_mode='HTML'
+                        parse_mode='Markdown'
                     )
             
             logger.info("Summary sent successfully")
         else:
             logger.warning("Summary generation returned empty content")
             await update.message.reply_text(
-                "Non sono riuscito a generare un riassunto.",
-                parse_mode='HTML'
+                "Non sono riuscito a generare un riassunto."
             )
 
     except ImportError:

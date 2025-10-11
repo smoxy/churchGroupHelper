@@ -18,9 +18,10 @@ The bot is designed for easy deployment using Docker Compose. **Now uses an exte
 - ✅ **External Whisper service**: Uses [Whisper ASR Webservice](https://github.com/ahmetoner/whisper-asr-webservice) for efficient transcription
 - ✅ **Smart text splitting**: Respects sentence boundaries when splitting long messages
 - ✅ **Cache system**: Already transcribed audio files are retrieved from cache without re-transcription
-- ✅ **AI-powered summaries**: Generate comprehensive summaries of conversations including both text messages and audio transcriptions
-- ✅ **Smart citations**: Summaries include clickable user mentions for important quotes
+- ✅ **AI-powered summaries**: Generate comprehensive summaries using **LangChain** for better prompt adherence
+- ✅ **Smart citations**: Summaries include clickable user mentions and message links
 - ✅ **Unified conversation view**: Messages and transcriptions are combined chronologically in summaries
+- ✅ **Few-shot learning**: AI trained with examples for consistent HTML output format
 
 See [EXTERNAL_WHISPER_SERVICE.md](EXTERNAL_WHISPER_SERVICE.md) for setup details and [LONG_MESSAGES_HANDLING.md](LONG_MESSAGES_HANDLING.md) for information about the message splitting feature.
 
@@ -47,7 +48,7 @@ If you are using a Nvidia GPU remember to install the [NVIDIA Container Toolkit]
 | /adduser _<user_id>_ _<first_name>_ | Allow the user to use the transcription in private. You can reply to a message and the bot will take the _user_id_ and the _first_name_ automatically. |
 | /removeuser _<user_id>_     | Remove the user from the list of allowed one, denying the transcription feature. |
 | /setlimits _<n_messages>_ _<days>_  | Set retaining limits of collected messages. The messages that are older will be permanently deleted. |
-| /summarize                   | Reply to any message in the group to summarize the conversation from that message onwards. Includes both text messages and audio transcriptions. Uses Ollama Cloud with `gpt-oss:20b` model for intelligent summaries with citations. |
+| /summarize                   | Reply to any message in the group to summarize the conversation from that message onwards. Includes both text messages and audio transcriptions. Uses LangChain with Ollama Cloud (`gpt-oss:120b`) for intelligent summaries and citations. |
 
 ---
 
@@ -59,7 +60,7 @@ The `/summarize` command generates intelligent summaries of group conversations 
 
 1. **Reply to any message** in the group with `/summarize`
 2. The bot collects all **messages AND audio transcriptions** from that point onwards
-3. Sends them to Ollama Cloud API (`gpt-oss:20b` model)
+3. Sends them to Ollama Cloud API (`gpt-oss:120b` model) orchestrated via LangChain
 4. Generates a comprehensive summary with:
    - **Key discussion points** organized in a clear narrative
    - **Direct quotes** from important contributions
@@ -96,8 +97,13 @@ User D confirmed availability and commitment to help."
 ### Features
 
 - ✨ **Unified conversation view**: Text and audio transcriptions merged chronologically
-- 🎯 **Smart citations**: Important quotes linked to speakers
+- 🎯 **Smart citations**: Important quotes linked to speakers with clickable message links
 - 🌍 **Multilingual**: Summary generated in your group's configured language
+- 🧠 **LangChain-powered**: Advanced prompt engineering with few-shot examples for consistent output
+- 📏 **Concise output**: Strict 200-word limit, focusing only on key points
+- 🔗 **Interactive links**: Click on user names or quoted messages to navigate directly
+
+See [LANGCHAIN_REFACTORING.md](LANGCHAIN_REFACTORING.md) for technical details about the summarization system.
 - ⚡ **Real-time streaming**: See the summary being generated live
 - 📊 **Context preservation**: Maintains conversation flow and speaker attribution
 
@@ -132,7 +138,7 @@ User D confirmed availability and commitment to help."
 
 Currently, the bot's interface is in Italian, but transcription supports all languages available through [Whisper](https://github.com/openai/whisper).
 
-For summarization, which uses Ollama Cloud's `gpt-oss:20b` model, the AI can understand and respond in multiple languages based on your group's language settings. The summaries will be generated in the language configured for your group using the `/setlanguage` command.
+For summarization, the bot now leverages LangChain with Ollama Cloud's `gpt-oss:120b` model. The AI automatically writes the summary in the language configured for your group via `/setlanguage`, ensuring consistent, native-language recaps.
 
 If you'd like to contribute translations or other enhancements, feel free to [reach out](mailto:churchBot@sf-paris.dev).
 

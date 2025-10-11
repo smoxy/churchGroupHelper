@@ -50,9 +50,15 @@ class TranscriptionImprover:
 
     def _build_chain(self) -> Runnable[Dict[str, str], str]:
         """Assemble the prompt, model and output parser."""
+        system_prompt = self._system_prompt()
+        
+        # Log the system prompt during initialization for debugging
+        logger.debug(f"System prompt length: {len(system_prompt)} chars")
+        logger.debug(f"System prompt preview (first 300 chars): {system_prompt[:300]}")
+        
         prompt = ChatPromptTemplate.from_messages(
             [
-                ("system", self._system_prompt()),
+                ("system", system_prompt),
                 (
                     "human",
                     "Original transcription in {language_name}:\n\n{transcription}\n\n"
@@ -158,13 +164,33 @@ class TranscriptionImprover:
         }
 
         try:
+            logger.debug(f"Invoking LangChain with payload: language_name={language_name}, text_length={len(transcription)}")
             improved = self._chain.invoke(payload)
+            
+            # Log raw response for debugging
+            logger.debug(f"Raw improved response type: {type(improved)}")
+            logger.debug(f"Raw improved response length: {len(improved) if improved else 0}")
+            if improved:
+                logger.debug(f"First 200 chars of improved: {improved[:200]}")
+            else:
+                logger.warning("Model returned empty or None response!")
+            
+            # Check if improvement is valid
+            if not improved or not improved.strip():
+                logger.error(
+                    f"Model {self._model_name} returned empty response. "
+                    f"This might indicate a prompt issue or model failure. "
+                    f"Keeping original transcription."
+                )
+                return transcription
+            
+            improved_stripped = improved.strip()
             logger.info(
                 f"Transcription improved successfully "
                 f"(original: {len(transcription)} chars, "
-                f"improved: {len(improved)} chars)"
+                f"improved: {len(improved_stripped)} chars)"
             )
-            return improved.strip()
+            return improved_stripped
         except Exception as e:
             logger.error(
                 f"Failed to improve transcription with model {self._model_name}: {e}",

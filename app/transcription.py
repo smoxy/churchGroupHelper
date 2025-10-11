@@ -144,16 +144,28 @@ class Transcriber:
                     if self.improver and transcription:
                         try:
                             logger.info("Improving transcription quality with LangChain pipeline...")
+                            logger.debug(f"Original transcription preview (first 200 chars): {transcription[:200]}")
+                            
                             improved_transcription = self.improver.improve(transcription, language)
-                            if improved_transcription:
+                            
+                            logger.debug(f"Returned improved_transcription type: {type(improved_transcription)}")
+                            logger.debug(f"Returned improved_transcription length: {len(improved_transcription) if improved_transcription else 0}")
+                            
+                            if improved_transcription and improved_transcription.strip():
                                 logger.info(
                                     f"Transcription improved: "
                                     f"Original length: {len(transcription)} chars, "
                                     f"Improved length: {len(improved_transcription)} chars"
                                 )
+                                logger.debug(f"Improved transcription preview (first 200 chars): {improved_transcription[:200]}")
                                 transcription = improved_transcription
                             else:
-                                logger.warning("Improvement returned empty result, keeping original")
+                                logger.warning(
+                                    f"Improvement returned empty/invalid result "
+                                    f"(type: {type(improved_transcription)}, "
+                                    f"length: {len(improved_transcription) if improved_transcription else 0}), "
+                                    f"keeping original"
+                                )
                         except Exception as e:
                             logger.error(f"Failed to improve transcription: {e}", exc_info=True)
                             logger.info("Keeping original transcription due to improvement error")

@@ -280,44 +280,45 @@ async def summarize(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id_for_link = str(chat.id)[4:] if str(chat.id).startswith('-100') else str(chat.id)
     
     prompt = (
-        "You are an assistant tasked with summarizing a Telegram group discussion. The summary must:\n"
-        f"- Be written in {language_name}, following a neutral and objective tone.\n"
-        "- Use proper Markdown formatting (NOT HTML).\n"
-        "- Include an organic, flowing narrative that captures the essence of the conversation.\n"
-        "- Identify and highlight the most critical moments and decisions by quoting directly from participants.\n"
-        "- The conversation includes both text messages and audio transcriptions (marked with [AUDIO TRASCRITTO]).\n\n"
+        "You are an assistant tasked with creating a CONCISE summary of a Telegram group discussion.\n\n"
         
-        "**IMPORTANT FORMATTING RULES:**\n"
-        "1. To mention a user, use this Markdown format: [Username](tg://user?id=USER_ID)\n"
-        "   Example: [Simone](tg://user?id=265699760) said something important\n\n"
+        f"LANGUAGE: Write in {language_name}\n"
+        "FORMAT: Use ONLY HTML tags (NO Markdown syntax like **, *, >, ##, or []())\n"
+        "LENGTH: Maximum 200 words. Be brief and to the point.\n\n"
         
-        "2. To reference a specific message, use this format: [\"Quoted text\"](https://t.me/c/" + chat_id_for_link + "/MESSAGE_ID)\n"
-        f"   Example: [\"This is important\"](https://t.me/c/{chat_id_for_link}/12345)\n\n"
+        "ALLOWED HTML TAGS:\n"
+        "- <b>text</b> for bold\n"
+        "- <i>text</i> for italic\n"
+        "- <a href=\"URL\">text</a> for links\n"
+        "- Line breaks with \\n\\n (double newline)\n"
+        "- NO lists, NO headers, NO blockquotes, NO other special formatting\n\n"
         
-        "3. When quoting important contributions, combine both:\n"
-        "   [Username](tg://user?id=USER_ID) wrote: [\"Exact quote\"](https://t.me/c/" + chat_id_for_link + "/MESSAGE_ID)\n\n"
+        "USER MENTIONS:\n"
+        f'- Format: <a href="tg://user?id=USER_ID">Username</a>\n'
+        f'- Example: <a href="tg://user?id=265699760">Simone</a>\n\n'
         
-        "4. Use standard Markdown for formatting:\n"
-        "   - **bold** for emphasis\n"
-        "   - *italic* for secondary emphasis\n"
-        "   - Use bullet points and numbered lists where appropriate\n\n"
+        "MESSAGE LINKS:\n"
+        f'- Format: <a href="https://t.me/c/{chat_id_for_link}/MESSAGE_ID">quoted text</a>\n'
+        f'- Example: <a href="https://t.me/c/{chat_id_for_link}/12345">"Messaggio importante"</a>\n\n'
         
-        "**DATA AVAILABLE:**\n"
-        "Each message in the conversation provides:\n"
-        "- Author name and ID in format: 'Name (ID: USER_ID) at TIME'\n"
-        "- The telegram_message_id is available as TELEGRAM_MSG_ID\n"
-        "- Extract USER_ID and TELEGRAM_MSG_ID from the conversation data to create proper links\n\n"
+        "INSTRUCTIONS:\n"
+        "1. Write a flowing narrative paragraph (NOT a list)\n"
+        "2. Mention only the MOST important points\n"
+        "3. Quote key messages using message links\n"
+        "4. Mention users with user links when relevant\n"
+        "5. If discussion is trivial (just test messages), keep it to 1-2 sentences\n"
+        "6. Audio transcriptions: mention briefly as \"messaggi vocali\" if relevant\n"
+        "7. NO section headers, NO bullet points, NO numbered lists\n"
+        "8. STRICT: Stay under 200 words\n\n"
         
-        "Here is the conversation:\n\n"
+        "DATA FORMAT:\n"
+        "Messages show: Name (ID: USER_ID) at TIME [MSG_ID: MESSAGE_ID]\n"
+        "Extract USER_ID and MESSAGE_ID to create links.\n\n"
+        
+        "CONVERSATION:\n"
         f"{structured_text}\n\n"
         
-        "**INSTRUCTIONS:**\n"
-        "- Only quote the most relevant parts that drove the discussion forward\n"
-        "- Use the message links for important quotes so users can jump to the original message\n"
-        "- Use user mention links when referring to people\n"
-        "- Provide a well-structured summary with clear sections if multiple topics are discussed\n"
-        "- When summarizing audio transcriptions, indicate they were voice messages if relevant\n"
-        "- Keep the tone professional but conversational"
+        "Generate a brief, flowing summary in HTML format:"
     )
 
     # Use Ollama Cloud API to get the summary with streaming
@@ -356,12 +357,12 @@ async def summarize(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode='HTML'
         )
 
-        logger.info("Sending request to Ollama Cloud API (gpt-oss:20b model)")
+        logger.info("Sending request to Ollama Cloud API (gpt-oss:120b model)")
         
         # Stream the response and collect it
         summary = ""
         try:
-            for part in client.chat('gpt-oss:20b', messages=messages_for_llm, stream=True):
+            for part in client.chat('gpt-oss:120b', messages=messages_for_llm, stream=True):
                 summary += part['message']['content']
         except Exception as stream_error:
             logger.error(f"Error during streaming from Ollama API: {stream_error}")
@@ -385,12 +386,12 @@ async def summarize(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             for i, chunk in enumerate(summary_chunks):
                 if i == 0:
-                    await update.message.reply_text(chunk, parse_mode='Markdown')
+                    await update.message.reply_text(chunk, parse_mode='HTML')
                 else:
                     await context.bot.send_message(
                         chat_id=chat.id,
                         text=chunk,
-                        parse_mode='Markdown'
+                        parse_mode='HTML'
                     )
             
             logger.info("Summary sent successfully")

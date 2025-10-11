@@ -31,6 +31,124 @@ class Transcriber:
         else:
             logger.info("OLLAMA_API_KEY not set, transcription improvement disabled")
 
+    async def _improve_with_streaming(self, transcription: str, language: str, telegram_context) -> str:
+        """
+        Improve transcription with streaming updates to Telegram message.
+        
+        Args:
+            transcription: Original transcription text
+            language: Language code
+            telegram_context: Telegram context with update and message objects
+            
+        Returns:
+            Complete improved transcription
+        """
+        from utils import TELEGRAM_MAX_MESSAGE_LENGTH
+        import asyncio
+        
+        # Send initial "processing" message
+        chat_id = telegram_context['update'].effective_chat.id
+        processing_msg = await telegram_context['context'].bot.send_message(
+            chat_id=chat_id,
+            text="🔄 Miglioramento trascrizione in corso..."
+        )
+        
+        accumulated_text = ""
+        last_update_time = asyncio.get_event_loop().time()
+        last_update_length = 0
+        UPDATE_INTERVAL = 1.0  # Update every 1 second
+        MIN_CHARS_FOR_UPDATE = 50  # Or when we have at least 50 new chars
+        
+        try:
+            # Stream the improved transcription
+            for chunk in self.improver.improve_stream(transcription, language):
+                accumulated_text += chunk
+                current_time = asyncio.get_event_loop().time()
+                chars_since_update = len(accumulated_text) - last_update_length
+                
+                # Update message if enough time passed or enough new chars
+                should_update = (
+                    (current_time - last_update_time >= UPDATE_INTERVAL) or
+                    (chars_since_update >= MIN_CHARS_FOR_UPDATE)
+                )
+                
+                if should_update and accumulated_text.strip():
+                    # Truncate if too long for single message
+                    display_text = accumulated_text
+                    if len(display_text) > TELEGRAM_MAX_MESSAGE_LENGTH - 100:
+                        display_text = display_text[:TELEGRAM_MAX_MESSAGE_LENGTH - 100] + "..."
+                    
+                    try:
+                        await telegram_context['context'].bot.edit_message_text(
+                            chat_id=chat_id,
+                            message_id=processing_msg.message_id,
+                            text=display_text
+                        )
+                        last_update_time = current_time
+                        last_update_length = len(accumulated_text)
+                    except Exception as e:
+                        # Ignore edit errors (message not changed, etc.)
+                        logger.debug(f"Could not edit message: {e}")
+            
+            # Final update with complete text
+            if accumulated_text.strip():
+                final_text = accumulated_text.strip()
+                
+                # If text is too long, send in multiple messages and delete the processing one
+                if len(final_text) > TELEGRAM_MAX_MESSAGE_LENGTH:
+                    from utils import split_message
+                    chunks = split_message(final_text)
+                    
+                    # Delete processing message
+                    try:
+                        await telegram_context['context'].bot.delete_message(
+                            chat_id=chat_id,
+                            message_id=processing_msg.message_id
+                        )
+                    except:
+                        pass
+                    
+                    # Send chunks
+                    for chunk in chunks:
+                        await telegram_context['context'].bot.send_message(
+                            chat_id=chat_id,
+                            text=chunk
+                        )
+                else:
+                    # Update with final text
+                    try:
+                        await telegram_context['context'].bot.edit_message_text(
+                            chat_id=chat_id,
+                            message_id=processing_msg.message_id,
+                            text=final_text
+                        )
+                    except Exception as e:
+                        logger.warning(f"Could not edit final message: {e}")
+                
+                return final_text
+            else:
+                # Empty result, delete processing message and return original
+                try:
+                    await telegram_context['context'].bot.delete_message(
+                        chat_id=chat_id,
+                        message_id=processing_msg.message_id
+                    )
+                except:
+                    pass
+                return transcription
+                
+        except Exception as e:
+            logger.error(f"Error during streaming improvement: {e}", exc_info=True)
+            # Delete processing message
+            try:
+                await telegram_context['context'].bot.delete_message(
+                    chat_id=chat_id,
+                    message_id=processing_msg.message_id
+                )
+            except:
+                pass
+            return transcription
+
     def valid_languages(self):
         # Lista delle lingue supportate da Whisper
         return [
@@ -83,7 +201,7 @@ class Transcriber:
             # Fallback to Italian if detection fails
             return 'it', {'it': 1.0}
 
-    def transcribe_audio(self, file_path, language: str, group_id: int, user_id: int, author_name: str, timestamp, telegram_message_id: int = None, is_allowed: bool=False) -> tuple:
+    async def transcribe_audio(self, file_path, language: str, group_id: int, user_id: int, author_name: str, timestamp, telegram_message_id: int = None, is_allowed: bool=False, telegram_context=None) -> tuple:
         # Compute hash
         audio_hash = compute_file_hash(file_path, language)
 
@@ -143,29 +261,49 @@ class Transcriber:
                     # Improve transcription quality if improver is available
                     if self.improver and transcription:
                         try:
-                            logger.info("Improving transcription quality with LangChain pipeline...")
-                            logger.debug(f"Original transcription preview (first 200 chars): {transcription[:200]}")
-                            
-                            improved_transcription = self.improver.improve(transcription, language)
-                            
-                            logger.debug(f"Returned improved_transcription type: {type(improved_transcription)}")
-                            logger.debug(f"Returned improved_transcription length: {len(improved_transcription) if improved_transcription else 0}")
-                            
-                            if improved_transcription and improved_transcription.strip():
-                                logger.info(
-                                    f"Transcription improved: "
-                                    f"Original length: {len(transcription)} chars, "
-                                    f"Improved length: {len(improved_transcription)} chars"
+                            # If telegram context is provided, use streaming to update message in real-time
+                            if telegram_context:
+                                logger.info("Improving transcription quality with streaming LangChain pipeline...")
+                                logger.debug(f"Original transcription preview (first 200 chars): {transcription[:200]}")
+                                
+                                improved_transcription = await self._improve_with_streaming(
+                                    transcription, language, telegram_context
                                 )
-                                logger.debug(f"Improved transcription preview (first 200 chars): {improved_transcription[:200]}")
-                                transcription = improved_transcription
+                                
+                                if improved_transcription and improved_transcription.strip():
+                                    logger.info(
+                                        f"Transcription improved with streaming: "
+                                        f"Original length: {len(transcription)} chars, "
+                                        f"Improved length: {len(improved_transcription)} chars"
+                                    )
+                                    transcription = improved_transcription
+                                else:
+                                    logger.warning("Streaming improvement returned empty result, keeping original")
                             else:
-                                logger.warning(
-                                    f"Improvement returned empty/invalid result "
-                                    f"(type: {type(improved_transcription)}, "
-                                    f"length: {len(improved_transcription) if improved_transcription else 0}), "
-                                    f"keeping original"
-                                )
+                                # Fallback to non-streaming if no telegram context
+                                logger.info("Improving transcription quality with LangChain pipeline (no streaming)...")
+                                logger.debug(f"Original transcription preview (first 200 chars): {transcription[:200]}")
+                                
+                                improved_transcription = self.improver.improve(transcription, language)
+                                
+                                logger.debug(f"Returned improved_transcription type: {type(improved_transcription)}")
+                                logger.debug(f"Returned improved_transcription length: {len(improved_transcription) if improved_transcription else 0}")
+                                
+                                if improved_transcription and improved_transcription.strip():
+                                    logger.info(
+                                        f"Transcription improved: "
+                                        f"Original length: {len(transcription)} chars, "
+                                        f"Improved length: {len(improved_transcription)} chars"
+                                    )
+                                    logger.debug(f"Improved transcription preview (first 200 chars): {improved_transcription[:200]}")
+                                    transcription = improved_transcription
+                                else:
+                                    logger.warning(
+                                        f"Improvement returned empty/invalid result "
+                                        f"(type: {type(improved_transcription)}, "
+                                        f"length: {len(improved_transcription) if improved_transcription else 0}), "
+                                        f"keeping original"
+                                    )
                         except Exception as e:
                             logger.error(f"Failed to improve transcription: {e}", exc_info=True)
                             logger.info("Keeping original transcription due to improvement error")

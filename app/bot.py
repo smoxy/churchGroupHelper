@@ -127,7 +127,13 @@ async def transcribe_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Transcribe the audio
     try:
-        transcription, cached = transcriber.transcribe_audio(
+        # Prepare telegram context for streaming
+        telegram_ctx = {
+            'update': update,
+            'context': context
+        }
+        
+        transcription, cached = await transcriber.transcribe_audio(
             file_path=file_path,
             language=language,
             group_id=group_id,
@@ -135,7 +141,8 @@ async def transcribe_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
             author_name=user.first_name,
             timestamp=update.message.date,  # Use the date of the message
             telegram_message_id=update.message.message_id,
-            is_allowed=is_allowed(update)
+            is_allowed=is_allowed(update),
+            telegram_context=telegram_ctx
         )
         if not cached and not is_allowed(update):
             assert transcription==""

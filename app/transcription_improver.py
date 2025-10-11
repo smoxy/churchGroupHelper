@@ -3,7 +3,7 @@
 import logging
 import os
 from textwrap import dedent
-from typing import Dict, Optional
+from typing import Dict, Optional, Iterator
 
 from iso639 import Language
 from langchain_core.prompts import ChatPromptTemplate
@@ -199,6 +199,69 @@ class TranscriptionImprover:
             # Return original transcription if improvement fails
             logger.warning("Returning original transcription due to error")
             return transcription
+
+    def improve_stream(self, transcription: str, language: str = "it") -> Iterator[str]:
+        """
+        Improve the quality of a transcription with streaming output.
+        
+        Args:
+            transcription: The original transcription text to improve
+            language: Language code of the transcription (default: "it")
+            
+        Yields:
+            Chunks of improved text as they are generated
+        """
+        if not transcription or not transcription.strip():
+            logger.warning("Empty transcription provided for improvement")
+            yield transcription
+            return
+
+        # Skip improvement for very short transcriptions (likely already good)
+        if len(transcription.strip()) < 50:
+            logger.info("Transcription too short, skipping improvement")
+            yield transcription
+            return
+
+        # Convert language code to readable name
+        language_name = self._get_language_name(language)
+
+        logger.info(
+            f"Improving transcription with streaming (length: {len(transcription)} chars, "
+            f"language: {language} ({language_name}), model: {self._model_name})"
+        )
+
+        payload = {
+            "transcription": transcription,
+            "language_name": language_name,
+        }
+
+        try:
+            logger.debug(f"Starting streaming LangChain with payload: language_name={language_name}, text_length={len(transcription)}")
+            
+            # Use streaming
+            chunk_count = 0
+            total_length = 0
+            for chunk in self._chain.stream(payload):
+                if chunk:
+                    chunk_count += 1
+                    total_length += len(chunk)
+                    logger.debug(f"Streaming chunk #{chunk_count}: {len(chunk)} chars")
+                    yield chunk
+            
+            logger.info(f"Streaming completed: {chunk_count} chunks, {total_length} total chars")
+            
+            if chunk_count == 0 or total_length == 0:
+                logger.warning("Streaming produced no output, returning original")
+                yield transcription
+                
+        except Exception as e:
+            logger.error(
+                f"Failed to improve transcription with streaming: {e}",
+                exc_info=True
+            )
+            # Return original transcription if improvement fails
+            logger.warning("Returning original transcription due to streaming error")
+            yield transcription
 
     def _get_language_name(self, language: str) -> str:
         """

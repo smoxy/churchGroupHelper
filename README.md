@@ -22,8 +22,9 @@ The bot is designed for easy deployment using Docker Compose. **Now uses an exte
 - ✅ **Smart citations**: Summaries include clickable user mentions and message links
 - ✅ **Unified conversation view**: Messages and transcriptions are combined chronologically in summaries
 - ✅ **Few-shot learning**: AI trained with examples for consistent HTML output format
+- ✅ **Transcription improvement**: Automatic punctuation and formatting correction for long audio transcriptions using LangChain
 
-See [EXTERNAL_WHISPER_SERVICE.md](EXTERNAL_WHISPER_SERVICE.md) for setup details and [LONG_MESSAGES_HANDLING.md](LONG_MESSAGES_HANDLING.md) for information about the message splitting feature.
+See [EXTERNAL_WHISPER_SERVICE.md](EXTERNAL_WHISPER_SERVICE.md) for setup details, [LONG_MESSAGES_HANDLING.md](LONG_MESSAGES_HANDLING.md) for information about the message splitting feature, and [TRANSCRIPTION_IMPROVEMENT.md](TRANSCRIPTION_IMPROVEMENT.md) for details about AI-powered transcription enhancement.
 
 ---
 
@@ -35,7 +36,8 @@ To run the bot for the first time it needs an .env file with the following varia
 | CONTAINER_NAME | The name that docker will use for the container |
 | BOT_TOKEN      | Telegram bot token taked from BotFather |
 | ADMINS         | IDs separated by a comma to declare which are the bot's admins |
-| OLLAMA_API_KEY | Your Ollama Cloud API key for the summarization feature (get it from https://ollama.com) |
+| OLLAMA_API_KEY | Your Ollama Cloud API key for the summarization and transcription improvement features (get it from https://ollama.com) |
+| TRANSCRIPTION_IMPROVER_MODEL | (Optional) Model to use for transcription improvement. Default: `gpt-oss:20b` |
 
 If you are using a Nvidia GPU remember to install the [NVIDIA Container Toolkit](https://github.com/NVIDIA/nvidia-container-toolkit)
 

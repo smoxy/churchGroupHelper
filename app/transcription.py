@@ -3,8 +3,9 @@ from datetime import datetime
 import logging
 import requests
 import time
-from utils import TMP_DIR, compute_file_hash, WHISPER_SERVICE_URL
+from utils import TMP_DIR, compute_file_hash, WHISPER_SERVICE_URL, OLLAMA_API_KEY, TRANSCRIPTION_IMPROVER_MODEL
 from database import Database
+from transcription_improver import create_improver
 
 # Enable logging
 logConf = logging.basicConfig(
@@ -18,6 +19,17 @@ class Transcriber:
         self.db = Database.get_instance()
         self.service_url = WHISPER_SERVICE_URL
         logger.info(f"Whisper service URL: {self.service_url}")
+        
+        # Initialize transcription improver if API key is available
+        self.improver = None
+        if OLLAMA_API_KEY:
+            try:
+                self.improver = create_improver(OLLAMA_API_KEY, TRANSCRIPTION_IMPROVER_MODEL)
+                logger.info(f"Transcription improver initialized with model: {TRANSCRIPTION_IMPROVER_MODEL}")
+            except Exception as e:
+                logger.warning(f"Failed to initialize transcription improver: {e}")
+        else:
+            logger.info("OLLAMA_API_KEY not set, transcription improvement disabled")
 
     def valid_languages(self):
         # Lista delle lingue supportate da Whisper
@@ -97,8 +109,8 @@ class Transcriber:
         # Transcribe audio using external service with retry logic
         # The Whisper container unloads the model from VRAM after 2 minutes of inactivity
         # It needs time to reload the model when a new request arrives
-        max_retries = 3
-        retry_delay = 3  # seconds between retries
+        max_retries = 7
+        retry_delay = 5  # seconds between retries
         url = f"{self.service_url}/asr"
         
         for attempt in range(1, max_retries + 1):
@@ -127,6 +139,24 @@ class Transcriber:
                     transcription = response.text.strip()
                     
                     logger.info(f"[Attempt {attempt}/{max_retries}] Transcription successful - Length: {len(transcription)} characters")
+                    
+                    # Improve transcription quality if improver is available
+                    if self.improver and transcription:
+                        try:
+                            logger.info("Improving transcription quality with LangChain pipeline...")
+                            improved_transcription = self.improver.improve(transcription, language)
+                            if improved_transcription:
+                                logger.info(
+                                    f"Transcription improved: "
+                                    f"Original length: {len(transcription)} chars, "
+                                    f"Improved length: {len(improved_transcription)} chars"
+                                )
+                                transcription = improved_transcription
+                            else:
+                                logger.warning("Improvement returned empty result, keeping original")
+                        except Exception as e:
+                            logger.error(f"Failed to improve transcription: {e}", exc_info=True)
+                            logger.info("Keeping original transcription due to improvement error")
                     
                     # Add the transcription as a message (only for groups - privacy)
                     message_id = None

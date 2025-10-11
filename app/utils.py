@@ -31,6 +31,12 @@ if WHISPER_SERVICE_URI:
 else:
     WHISPER_SERVICE_URL = f"http://{WHISPER_SERVICE_HOST}:{WHISPER_SERVICE_PORT}"
 
+# Ollama configuration
+OLLAMA_API_KEY = os.getenv('OLLAMA_API_KEY', '')
+
+# Transcription improvement model configuration
+TRANSCRIPTION_IMPROVER_MODEL = os.getenv('TRANSCRIPTION_IMPROVER_MODEL', 'gpt-oss:20b')
+
 # Telegram constraints
 TELEGRAM_MAX_MESSAGE_LENGTH = 4096
 

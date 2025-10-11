@@ -93,13 +93,11 @@ class TranscriptionImprover:
             - Add colons (:) and semicolons (;) where necessary
 
             FORMATTING:
-            - PRESERVE all intentional paragraph breaks (double line breaks \\n\\n)
-            - Do NOT remove or reduce double line breaks (\\n\\n) - they are intentional paragraph separators
-            - Remove ONLY excessive line breaks (more than two consecutive \\n\\n)
-            - Replace single unnecessary line breaks with spaces (but keep intentional paragraphs)
+            - Remove excessive line breaks (more than two consecutive)
+            - Replace unnecessary line breaks with spaces
+            - Maintain logical paragraphs using a blank line (double line break)
             - Use CAPITALS for the beginning of sentences
-            - Fix irregular spacing between words
-            - NEVER insert line breaks after commas, periods, or other punctuation
+            - Fix irregular spacing
 
             COHERENCE:
             - Verify that the text is coherent in the declared language ({language_name})

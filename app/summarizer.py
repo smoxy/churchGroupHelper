@@ -10,7 +10,7 @@ from iso639 import Language
 from langchain_core.prompts import ChatPromptTemplate, FewShotChatMessagePromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import Runnable
-from langchain_community.chat_models import ChatOllama
+from langchain_ollama import ChatOllama
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +38,11 @@ class ConversationSummarizer:
             base_url="https://ollama.com",
             model="gpt-oss:120b",
             temperature=0.3,
-            api_key=api_key,
+            client_kwargs={
+                "headers": {
+                    "Authorization": f"Bearer {api_key}"
+                }
+            }
         )
         self._chain = self._build_chain()
 

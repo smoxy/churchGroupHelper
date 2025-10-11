@@ -56,8 +56,9 @@ class Transcriber:
         accumulated_text = ""
         last_update_time = asyncio.get_event_loop().time()
         last_update_length = 0
-        UPDATE_INTERVAL = 1.0  # Update every 1 second
-        MIN_CHARS_FOR_UPDATE = 50  # Or when we have at least 50 new chars
+        UPDATE_INTERVAL = 2.5  # Update every 2.5 seconds (Telegram limit: ~30 req/sec per chat)
+        MIN_CHARS_FOR_UPDATE = 200  # Or when we have at least 200 new chars (5-10 tokens approx)
+        MAX_WAIT_FOR_UPDATE = 5.0  # After 5s, update even with fewer chars
         
         try:
             # Stream the improved transcription
@@ -65,11 +66,14 @@ class Transcriber:
                 accumulated_text += chunk
                 current_time = asyncio.get_event_loop().time()
                 chars_since_update = len(accumulated_text) - last_update_length
+                time_since_update = current_time - last_update_time
                 
-                # Update message if enough time passed or enough new chars
+                # Update message with smart logic:
+                # 1. If we have enough chars AND enough time passed (normal flow)
+                # 2. OR if too much time passed (>5s), update anyway to show progress
                 should_update = (
-                    (current_time - last_update_time >= UPDATE_INTERVAL) or
-                    (chars_since_update >= MIN_CHARS_FOR_UPDATE)
+                    (time_since_update >= UPDATE_INTERVAL and chars_since_update >= MIN_CHARS_FOR_UPDATE) or
+                    (time_since_update >= MAX_WAIT_FOR_UPDATE and chars_since_update >= 50)
                 )
                 
                 if should_update and accumulated_text.strip():

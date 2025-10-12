@@ -14,7 +14,7 @@ services:
     volumes:
       - /etc/localtime:/etc/localtime:ro
       - ${WORK_DIR}/app:/app:ro # Optional: If you want to mount the app folder to edit the code without rebuilding the image. DEBUG ONLY
-      - ${WORK_DIR}/data/bot.db:/data/bot.db
+      - ${WORK_DIR}/data:/data
       - type: tmpfs # Optional: 100MB of memory, reduces SSD/SD Card wear. Here will be stored only the current processed audio file.
         target: /tmp/cache
         tmpfs:

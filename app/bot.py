@@ -56,16 +56,17 @@ async def whoami(update: Update, context: ContextTypes.DEFAULT_TYPE):
     is_group_authorized = chat.id in db.get_authorized_groups() if chat.type in ['group', 'supergroup'] else False
 
     response = (
-        f"👤 Utente: {user.first_name} \(ID: `{user.id}`\)\n"
-        f"💬 Chat: {chat.title if chat.title else 'Chat privata'} \(ID: `{chat.id}`\)\n"
-        f"🌐 Lingua di trascrizione: {language} \({lang_name}\)\n"
+        f"👤 Utente: {user.first_name} (ID: <code>{user.id}</code>)\n"
+        f"💬 Chat: {chat.title if chat.title else 'Chat privata'} (ID: <code>{chat.id}</code>)\n"
+        f"🌐 Lingua di trascrizione: {language} ({lang_name})\n"
         f"🛡️ Sei amministratore: {'Sì' if is_user_admin else 'No'}\n"
         f"{'✅' if is_user_authorized else '❌'} Sei autorizzato: {'Sì' if is_user_authorized else 'No'}\n"
     )
     if chat.type in ['group', 'supergroup']:
         response += f"{'✅' if is_group_authorized else '❌'} Gruppo autorizzato: {'Sì' if is_group_authorized else 'No'}\n"
+    logger.info(f"whoami response for user {user.first_name} ({user.id}) in chat {chat.id}")
 
-    await update.message.reply_text(response, parse_mode='MarkdownV2')
+    await update.message.reply_text(response, parse_mode='HTML')
 
 
 

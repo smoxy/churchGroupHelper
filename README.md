@@ -2,29 +2,129 @@
 
 ## [python-telegram-bot](https://github.com/python-telegram-bot/python-telegram-bot) for Church Groups
 
-This project aims to create a bot that serves as a multi-tool for church group chats, providing a range of practical features:
+A comprehensive Telegram bot designed to serve as a multi-tool for church group chats, providing practical features for community management, communication, and administration.
 
-1. **Transcribe audio messages** for easy sharing and documentation of voice messages.
-2. **Schedule messages** for future events or reminders. (TODO)
-3. **Store important notes** or reminders, like messages or birthdays. (TODO)
-4. **Summarize group conversations** from a specific message onward, useful for recapping discussions using Ollama Cloud API.
-5. **Create and manage polls with a quorum** for voting on key decisions, especially valuable for church council meetings. (TODO)
+## 🎯 Project Goals and Status
+
+### ✅ Completed Features
+
+1. **[Audio Transcription](#-audio-transcription)** - Transcribe audio messages in group chats and private conversations
+   - Multi-language support via Whisper ASR
+   - External service integration for resource efficiency
+   - Smart caching system to avoid re-transcription
+   - See [EXTERNAL_WHISPER_SERVICE.md](manuals/EXTERNAL_WHISPER_SERVICE.md) for details
+
+2. **[Conversation Summarization](#-conversation-summaries)** - Intelligent AI-powered summaries of group discussions
+   - LangChain-based summarization with Ollama Cloud
+   - Unified view of text messages and audio transcriptions
+   - Clickable citations and user mentions
+   - See [SUMMARIZE_FEATURE.md](manuals/SUMMARIZE_FEATURE.md) and [LANGCHAIN_REFACTORING.md](manuals/LANGCHAIN_REFACTORING.md)
+
+3. **[Transcription Enhancement](#-transcription-improvement)** - AI-powered punctuation and formatting correction
+   - Automatic improvement of long audio transcriptions
+   - Better readability with proper punctuation
+   - See [TRANSCRIPTION_IMPROVEMENT.md](manuals/TRANSCRIPTION_IMPROVEMENT.md)
+
+### 🚧 In Development
+
+4. **Member Database with Birthday Tracking**
+   - Database schema implemented (User, Church models with birthday fields)
+   - Foundation for church member management ready
+   - Geographic location tracking for churches (latitude, longitude, address)
+   - **Next Steps:**
+     - Implement birthday notification system
+     - Create automated birthday message scheduler
+     - Add group-specific birthday announcement settings
+     - Build permission system for birthday visibility
+
+### 📋 Planned Features
+
+5. **Scheduled Messages** - Send messages to multiple chats simultaneously at scheduled times
+   - **Requirements:**
+     - Message scheduling interface (command or inline keyboard)
+     - Multi-chat selection system
+     - Time zone management
+     - Message queue system
+     - Persistent storage for scheduled messages
+     - Admin-only access controls
+   - **Use Cases:**
+     - Announcements for church events
+     - Weekly reminders across multiple groups
+     - Coordinated communication to different communities
+
+6. **ACMS Integration** - Member scraping and management from ACMS website
+   - **Requirements:**
+     - ACMS website authentication (credential-less, privacy-first)
+     - Scraper for member data (name, surname, birthday)
+     - Sync mechanism with local database
+     - "Dummy" flag for non-official members
+     - Soft-delete for removed members (mark as inactive)
+     - **IMPORTANT: Requires permissions from SDA and UICCA (for Italy)**
+   - **Privacy Considerations:**
+     - No credential storage (temporary session only)
+     - Local-only data storage
+     - User consent management
+     - GDPR compliance for EU members
+   - **Technical Approach:**
+     - Separate microservice architecture (recommended)
+     - API-based communication with main bot
+     - Scheduled sync jobs
+     - Conflict resolution for data updates
+
+7. **Advanced Polling System** - Democratic decision-making with quorum support
+   - **Requirements:**
+     - Poll creation with customizable options
+     - Quorum setting (minimum participation threshold)
+     - Vote tracking (who voted, what they voted)
+     - Time-based expiration
+     - Auto-close on absolute majority (50% + 1)
+     - Vote reminders before expiration
+     - Results visualization
+     - Admin controls (close poll, extend time)
+   - **Use Cases:**
+     - Church council decisions
+     - Event planning votes
+     - Budget approvals
+     - Community consensus building
+   - **Technical Features:**
+     - Vote immutability (no revoting)
+     - Anonymous vs. transparent voting modes
+     - Result export for record-keeping
+     - Integration with message scheduling for reminders
+
+## 🚀 Quick Start
 
 The bot is designed for easy deployment using Docker Compose. **Now uses an external Whisper ASR service**, reducing resource requirements significantly (from 6GB RAM to ~512MB).
 
-### Key Features
+## 🔑 Key Features
 
-- ✅ **Automatic message splitting**: Long transcriptions are automatically split into multiple messages respecting Telegram's 4096 character limit
-- ✅ **External Whisper service**: Uses [Whisper ASR Webservice](https://github.com/ahmetoner/whisper-asr-webservice) for efficient transcription
-- ✅ **Smart text splitting**: Respects sentence boundaries when splitting long messages
-- ✅ **Cache system**: Already transcribed audio files are retrieved from cache without re-transcription
-- ✅ **AI-powered summaries**: Generate comprehensive summaries using **LangChain** for better prompt adherence
-- ✅ **Smart citations**: Summaries include clickable user mentions and message links
-- ✅ **Unified conversation view**: Messages and transcriptions are combined chronologically in summaries
-- ✅ **Few-shot learning**: AI trained with examples for consistent HTML output format
-- ✅ **Transcription improvement**: Automatic punctuation and formatting correction for long audio transcriptions using LangChain
+### 🎤 Audio Transcription
+- **Automatic message splitting**: Long transcriptions are automatically split into multiple messages respecting Telegram's 4096 character limit
+- **External Whisper service**: Uses [Whisper ASR Webservice](https://github.com/ahmetoner/whisper-asr-webservice) for efficient transcription
+- **Smart text splitting**: Respects sentence boundaries when splitting long messages
+- **Cache system**: Already transcribed audio files are retrieved from cache without re-transcription
+- **Multi-language support**: Supports all languages available through Whisper
+- **Authorization system**: Per-user and per-group access control
 
-See [EXTERNAL_WHISPER_SERVICE.md](EXTERNAL_WHISPER_SERVICE.md) for setup details, [LONG_MESSAGES_HANDLING.md](LONG_MESSAGES_HANDLING.md) for information about the message splitting feature, and [TRANSCRIPTION_IMPROVEMENT.md](TRANSCRIPTION_IMPROVEMENT.md) for details about AI-powered transcription enhancement.
+### 📝 Conversation Summaries
+- **AI-powered summaries**: Generate comprehensive summaries using **LangChain** with Ollama Cloud (`gpt-oss:120b`)
+- **Smart citations**: Summaries include clickable user mentions and message links
+- **Unified conversation view**: Messages and transcriptions are combined chronologically in summaries
+- **Few-shot learning**: AI trained with examples for consistent HTML output format
+- **Multilingual output**: Summaries generated in the group's configured language
+- **Real-time streaming**: See the summary being generated live
+
+### ✨ Transcription Improvement
+- **AI-powered enhancement**: Automatic punctuation and formatting correction for long audio transcriptions using LangChain
+- **Better readability**: Transforms raw transcriptions into properly formatted text
+- **Smart processing**: Only improves transcriptions longer than 300 characters
+- **Language-aware**: Respects the configured language for each group
+
+See detailed documentation:
+- [EXTERNAL_WHISPER_SERVICE.md](manuals/EXTERNAL_WHISPER_SERVICE.md) - Whisper setup and configuration
+- [SUMMARIZE_FEATURE.md](manuals/SUMMARIZE_FEATURE.md) - Summary feature details
+- [LANGCHAIN_REFACTORING.md](manuals/LANGCHAIN_REFACTORING.md) - Technical architecture
+- [TRANSCRIPTION_IMPROVEMENT.md](manuals/TRANSCRIPTION_IMPROVEMENT.md) - AI enhancement system
 
 ---
 
@@ -54,93 +154,191 @@ If you are using a Nvidia GPU remember to install the [NVIDIA Container Toolkit]
 
 ---
 
-## 📝 Conversation Summaries
+## �️ Roadmap & Next Steps
 
-The `/summarize` command generates intelligent summaries of group conversations using AI. Here's what makes it special:
+### Immediate Priorities (Q1 2026)
 
-### How it works
+1. **Birthday Notification System**
+   - [ ] Implement daily birthday check job
+   - [ ] Create birthday message templates (customizable per group)
+   - [ ] Add birthday announcement scheduling
+   - [ ] Build admin interface for birthday settings
+   - [ ] Add opt-in/opt-out mechanism for users
 
-1. **Reply to any message** in the group with `/summarize`
-2. The bot collects all **messages AND audio transcriptions** from that point onwards
-3. Sends them to Ollama Cloud API (`gpt-oss:120b` model) orchestrated via LangChain
-4. Generates a comprehensive summary with:
-   - **Key discussion points** organized in a clear narrative
-   - **Direct quotes** from important contributions
-   - **Clickable user mentions** for easy reference
-   - **Audio transcription context** (marked when relevant)
+2. **Message Scheduling Foundation**
+   - [ ] Design message queue database schema
+   - [ ] Implement scheduling interface
+   - [ ] Create multi-chat delivery system
+   - [ ] Add time zone management
+   - [ ] Build message preview and editing
 
-### 🔒 Privacy Design
+### Medium-term Goals (Q2-Q3 2026)
 
-The bot implements privacy-by-design principles:
+3. **ACMS Integration Microservice**
+   - [ ] Research ACMS website authentication flow
+   - [ ] Request permissions from SDA and UICCA
+   - [ ] Design microservice architecture
+   - [ ] Implement secure scraper (no credential retention)
+   - [ ] Create sync mechanism with main database
+   - [ ] Add conflict resolution for data updates
+   - [ ] Implement privacy controls and consent management
 
-- **Group transcriptions**: Linked to message metadata for summaries
-- **Private transcriptions**: NO user metadata stored (fully private)
-- **Data minimization**: User info (name, ID) stored ONLY in messages table
-- **Foreign key architecture**: Transcriptions reference messages, not duplicate data
-- **Retention policies**: Transcriptions cleaned up before messages (cache first)
+4. **Advanced Polling System**
+   - [ ] Design poll database schema with vote tracking
+   - [ ] Implement poll creation interface
+   - [ ] Add quorum calculation and validation
+   - [ ] Create time-based expiration system
+   - [ ] Build vote reminder scheduler
+   - [ ] Implement absolute majority auto-close
+   - [ ] Add results visualization and export
 
-### Example Usage
+### Long-term Vision
 
-```
-[User A sends a message about planning an event]
-[User B responds with details]
-[User C sends an audio message with additional ideas]
-[User D sends text confirming]
-
-Admin replies to User A's message with: /summarize
-
-Bot generates:
-"The group discussed planning the church event for next month. 
-User A suggested organizing it, and User B provided logistical details.
-User C shared additional ideas via audio message regarding venue options.
-User D confirmed availability and commitment to help."
-```
-
-### Features
-
-- ✨ **Unified conversation view**: Text and audio transcriptions merged chronologically
-- 🎯 **Smart citations**: Important quotes linked to speakers with clickable message links
-- 🌍 **Multilingual**: Summary generated in your group's configured language
-- 🧠 **LangChain-powered**: Advanced prompt engineering with few-shot examples for consistent output
-- 📏 **Concise output**: Strict 200-word limit, focusing only on key points
-- 🔗 **Interactive links**: Click on user names or quoted messages to navigate directly
-
-See [LANGCHAIN_REFACTORING.md](LANGCHAIN_REFACTORING.md) for technical details about the summarization system.
-- ⚡ **Real-time streaming**: See the summary being generated live
-- 📊 **Context preservation**: Maintains conversation flow and speaker attribution
-
-### Setup
-
-1. Add `OLLAMA_API_KEY` to your `.env` file (get it from https://ollama.com)
-2. Run database migrations (in order):
-   ```bash
-   # Step 1: Add telegram_message_id to messages table
-   python migrate_add_telegram_message_id.py ./data/bot.db
-   
-   # Step 2: Add message_id foreign key to transcriptions table
-   python migrate_transcription_metadata.py ./data/bot.db
-   ```
-3. Restart the bot
-4. Use `/summarize` in groups by replying to any message
-
-**Note**: Existing transcriptions won't have message links, but new ones will work automatically.
+- **Multi-church support**: Manage multiple church communities from one bot instance
+- **Mobile app integration**: Companion app for better member management
+- **Event management**: Full calendar integration for church events
+- **Donation tracking**: Transparent financial reporting (privacy-first)
+- **Volunteer scheduling**: Coordinate service rotations and assignments
 
 ---
 
-## Libraries Used
+## 🔒 Privacy & Security
 
+The bot implements **privacy-by-design** principles:
+
+- **Group transcriptions**: Linked to message metadata for summaries only
+- **Private transcriptions**: NO user metadata stored (fully private)
+- **Data minimization**: User info stored ONLY where necessary
+- **Foreign key architecture**: Avoids data duplication
+- **Retention policies**: Configurable message retention with automatic cleanup
+- **No credential storage**: Authentication sessions are never persisted (ACMS integration)
+- **GDPR compliance**: User consent management and data portability
+
+---
+
+## 📖 Detailed Feature Documentation
+
+### 📝 Conversation Summaries
+
+The `/summarize` command generates intelligent summaries of group conversations using AI.
+
+**How it works:**
+1. Reply to any message with `/summarize`
+2. Bot collects all messages and transcriptions from that point onwards
+3. Sends to Ollama Cloud API (`gpt-oss:120b`) via LangChain
+4. Generates comprehensive summary with citations and links
+
+**See:** [SUMMARIZE_FEATURE.md](manuals/SUMMARIZE_FEATURE.md) | [LANGCHAIN_REFACTORING.md](manuals/LANGCHAIN_REFACTORING.md)
+
+### 🎤 Audio Transcription
+
+Transcribe voice messages in groups and private chats with multi-language support.
+
+**Features:**
+- External Whisper ASR service integration
+- Smart caching to avoid re-transcription
+- Automatic message splitting for long transcriptions
+- Authorization system for users and groups
+
+**See:** [EXTERNAL_WHISPER_SERVICE.md](manuals/EXTERNAL_WHISPER_SERVICE.md)
+
+### ✨ Transcription Improvement
+
+AI-powered enhancement of raw transcriptions with proper punctuation and formatting.
+
+**Features:**
+- Automatic processing for transcriptions > 300 characters
+- Language-aware formatting
+- LangChain-based improvement pipeline
+
+**See:** [TRANSCRIPTION_IMPROVEMENT.md](manuals/TRANSCRIPTION_IMPROVEMENT.md)
+
+---
+
+## 🛠️ Technology Stack
+
+### Core Technologies
 - **Python**: 3.12
-- **python-telegram-bot**: For handling Telegram interactions.
-- **Whisper**: For audio transcription, supporting multilingual capabilities.
-- **Ollama**: For AI-powered conversation summaries via Ollama Cloud API.
-- **SQLAlchemy**: ORM for database management.
-- **python-iso639**: To find the full name from the ISO 639-1 language setted.
+- **python-telegram-bot**: Telegram Bot API wrapper for handling interactions
+- **SQLAlchemy**: ORM for database management with relationship support
+- **LangChain**: Framework for AI/LLM applications and prompt engineering
 
-## Supported Languages
+### AI & Machine Learning
+- **Whisper ASR**: Multi-language audio transcription via [Whisper ASR Webservice](https://github.com/ahmetoner/whisper-asr-webservice)
+- **Ollama Cloud**: AI-powered features (summaries, transcription improvement)
+  - Summary model: `gpt-oss:120b`
+  - Transcription improvement model: `gpt-oss:20b` (configurable)
 
-Currently, the bot's interface is in Italian, but transcription supports all languages available through [Whisper](https://github.com/openai/whisper).
+### Supporting Libraries
+- **python-iso639**: Language code handling (ISO 639-1 standard)
+- **geopy**: Geographic location services for church addresses
+- **Docker & Docker Compose**: Containerized deployment
 
-For summarization, the bot now leverages LangChain with Ollama Cloud's `gpt-oss:120b` model. The AI automatically writes the summary in the language configured for your group via `/setlanguage`, ensuring consistent, native-language recaps.
+---
 
-If you'd like to contribute translations or other enhancements, feel free to [reach out](mailto:churchBot@sf-paris.dev).
+## 🌍 Supported Languages
+
+- **Bot Interface**: Currently Italian (contributions welcome for translations)
+- **Transcription**: All languages supported by [Whisper](https://github.com/openai/whisper) (100+ languages)
+- **Summaries**: Generated in the group's configured language (via `/setlanguage`)
+- **AI Enhancement**: Language-aware formatting and punctuation
+
+---
+
+## 🤝 Contributing
+
+Contributions are welcome! Areas where help is especially appreciated:
+
+- **Translations**: Help translate the bot interface to other languages
+- **Feature Development**: Pick up any planned feature from the roadmap
+- **Testing**: Test the bot in different scenarios and report issues
+- **Documentation**: Improve guides and add examples
+
+Feel free to [reach out](mailto:churchBot@sf-paris.dev) or open an issue/PR on GitHub.
+
+---
+
+## 📚 Documentation Index
+
+### Setup & Configuration
+- [SETUP.md](manuals/SETUP.md) - Complete setup guide
+- [SETUP_VELOCE.md](manuals/SETUP_VELOCE.md) - Quick setup guide (Italian)
+- [EXTERNAL_WHISPER_SERVICE.md](manuals/EXTERNAL_WHISPER_SERVICE.md) - Whisper service configuration
+
+### Features
+- [SUMMARIZE_FEATURE.md](manuals/SUMMARIZE_FEATURE.md) - Conversation summarization
+- [TRANSCRIPTION_IMPROVEMENT.md](manuals/TRANSCRIPTION_IMPROVEMENT.md) - AI transcription enhancement
+
+### Architecture & Development
+- [DATABASE.md](manuals/DATABASE.md) - Database schema and design
+- [README_ORM.md](manuals/README_ORM.md) - ORM implementation details
+- [LANGCHAIN_REFACTORING.md](manuals/LANGCHAIN_REFACTORING.md) - LangChain integration architecture
+- [LANGCHAIN_SETUP.md](manuals/LANGCHAIN_SETUP.md) - LangChain setup guide
+
+### Migration & Changelogs
+- [MIGRATION_GUIDE.md](manuals/MIGRATION_GUIDE.md) - Database migration guide
+- [MIGRATION_SUMMARY.md](manuals/MIGRATION_SUMMARY.md) - Migration overview
+- [OLLAMA_INTEGRATION_CHANGELOG.md](manuals/OLLAMA_INTEGRATION_CHANGELOG.md) - Ollama integration changes
+- [TRANSCRIPTION_IMPROVEMENT_CHANGELOG.md](manuals/TRANSCRIPTION_IMPROVEMENT_CHANGELOG.md) - Enhancement feature changes
+
+### Quick Reference
+- [QUICK_REFERENCE.md](manuals/QUICK_REFERENCE.md) - Command and feature reference
+- [RIEPILOGO_IMPLEMENTAZIONE.md](manuals/RIEPILOGO_IMPLEMENTAZIONE.md) - Implementation summary (Italian)
+- [RIEPILOGO_MODIFICHE.md](manuals/RIEPILOGO_MODIFICHE.md) - Changes summary (Italian)
+
+---
+
+## 📄 License
+
+This project is licensed under the terms specified in the [LICENSE](LICENSE) file.
+
+---
+
+## 📬 Contact
+
+For questions, suggestions, or contributions, contact: [churchBot@sf-paris.dev](mailto:churchBot@sf-paris.dev)
+
+---
+
+**Made with ❤️ for church communities**
 

@@ -23,6 +23,52 @@ logger = logging.getLogger(__name__)
 db = Database.get_instance()
 transcriber = Transcriber()
 
+
+
+async def whoami(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    chat = update.effective_chat
+
+    if chat.type in ['group', 'supergroup']:
+        group_settings = db.get_group_settings(chat.id)
+        if not group_settings:
+            await update.message.reply_text("Questo gruppo non è autorizzato a usare il bot.")
+            return
+        language = group_settings['language']
+        group_id = chat.id
+    else:
+        language = db.get_user_language(user.id)
+        if not language:
+            await update.message.reply_text("Non hai impostato una lingua di trascrizione.\n Usa /setlanguage <codice_lingua> per impostarla.")
+        language = language or "it"
+        group_id = None  # No group_id in private chats
+
+    try:
+        match = Language.match(language)
+        if match and match.name:
+            lang_name = match.name.capitalize()
+    except Exception:
+        logger.debug("Unable to resolve language name for '%s'", language, exc_info=True)
+        lang_name = str(language).capitalize()
+
+    is_user_admin = is_admin(user.id)
+    is_user_authorized = user.id in db.get_authorized_users()
+    is_group_authorized = chat.id in db.get_authorized_groups() if chat.type in ['group', 'supergroup'] else False
+
+    response = (
+        f"👤 Utente: {user.first_name} (ID: {user.id})\n"
+        f"💬 Chat: {chat.title if chat.title else 'Chat privata'} (ID: {chat.id})\n"
+        f"🌐 Lingua di trascrizione: {language} ({lang_name})\n"
+        f"🛡️ Sei amministratore: {'Sì' if is_user_admin else 'No'}\n"
+        f"✅ Sei autorizzato: {'Sì' if is_user_authorized else 'No'}\n"
+    )
+    if chat.type in ['group', 'supergroup']:
+        response += f"✅ Gruppo autorizzato: {'Sì' if is_group_authorized else 'No'}\n"
+
+    await update.message.reply_text(response)
+
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Ciao! Trascriverò le registrazioni audio che mi invii. Puoi anche aggiungermi "
@@ -36,6 +82,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "NOTA: questo bot non tiene in memoria i file audio trascritti, ma memorizza per un periodo limitato (7 giorni)"
         " le trascrizioni, senza legarle a un utente, così da non dover trascrivere nuovamente lo stesso file."
     )
+
+
 
 def is_allowed(update: Update) -> bool:
     user_id = update.effective_user.id if update.effective_user else None
@@ -53,6 +101,7 @@ def is_allowed(update: Update) -> bool:
     
     return False
     
+
 
 async def set_language(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -95,6 +144,8 @@ async def set_language(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         db.update_user_language(user.id, user.first_name, language_code)
         await update.message.reply_text(f'La tua lingua di trascrizione è stata impostata su {language_code}')
+
+
 
 @send_action(ChatAction.TYPING)
 async def transcribe_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -185,6 +236,8 @@ async def message_collector(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # Clean old messages
         db.clean_old_messages(chat.id)
+
+
 
 @send_action(ChatAction.TYPING)
 async def summarize(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -332,6 +385,8 @@ async def summarize(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except:
             pass
 
+
+
 async def add_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     chat = update.effective_chat
@@ -346,6 +401,8 @@ async def add_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     db.add_authorized_group(chat.id, chat.title)
     await update.message.reply_text("Questo gruppo è stato aggiunto alla lista autorizzata.")
+
+
 
 async def remove_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -362,6 +419,8 @@ async def remove_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db.clean_old_messages(chat.id, all_messages=True)
     db.remove_authorized_group(chat.id)
     await update.message.reply_text("Questo gruppo è stato rimosso dalla lista autorizzata.")
+
+
 
 async def add_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -386,6 +445,8 @@ async def add_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db.add_authorized_user(user_id, first_name)
     await update.message.reply_text(f'Utente {first_name}@{user_id} può usare il bot per le trascrizioni')
 
+
+
 async def remove_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     chat = update.effective_chat
@@ -406,6 +467,8 @@ async def remove_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     db.remove_authorized_user(user_id)
     await update.message.reply_text(f'Utente {user_id} rimosso dalla lista autorizzata.')
+
+
 
 async def set_limits(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -430,6 +493,8 @@ async def set_limits(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db.update_group_limits(chat.id, message_limit=message_limit, time_limit=time_limit)
     await update.message.reply_text(f"Limiti aggiornati: {message_limit} messaggi, {time_limit} giorni")
 
+
+
 async def settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     If sended in a private chat, asks for a group to manage (list of groups where the user is an admin or a member),
@@ -448,6 +513,8 @@ async def settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     pass
 
+
+
 async def edit_user(update: Update, context: ContextTypes.DEFAULT_TYPE, church_group_id=None):
     """
     Edit the user's information:
@@ -463,10 +530,13 @@ async def edit_user(update: Update, context: ContextTypes.DEFAULT_TYPE, church_g
     """
     pass
 
+
+
 def main():
     application = ApplicationBuilder().token(TOKEN).build()
 
     # Command handlers
+    application.add_handler(CommandHandler('whoami', whoami))
     application.add_handler(CommandHandler('start', start))
     application.add_handler(CommandHandler('setlanguage', set_language))#TODO: move this function to group settings
     application.add_handler(CommandHandler('addgroup', add_group))

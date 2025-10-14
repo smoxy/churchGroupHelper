@@ -2,11 +2,12 @@
 
 import logging
 import os
+from datetime import datetime
 from textwrap import dedent
 from typing import Dict, Optional
 
 from iso639 import Language
-from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.prompts import ChatPromptTemplate, SystemMessagePromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import Runnable
 from langchain_ollama import ChatOllama
@@ -51,14 +52,15 @@ class TranscriptionImprover:
     def _build_chain(self) -> Runnable[Dict[str, str], str]:
         """Assemble the prompt, model and output parser."""
         system_prompt = self._system_prompt()
-        
-        # Log the system prompt during initialization for debugging
+        developer_prompt = self._developer_prompt()
+
         logger.debug(f"System prompt length: {len(system_prompt)} chars")
         logger.debug(f"System prompt preview (first 300 chars): {system_prompt[:300]}")
-        
+
         prompt = ChatPromptTemplate.from_messages(
             [
-                ("system", system_prompt),
+                SystemMessagePromptTemplate.from_template(system_prompt),
+                SystemMessagePromptTemplate.from_template(developer_prompt),
                 (
                     "human",
                     "Original transcription in {language_name}:\n\n{transcription}\n\n"
@@ -70,63 +72,44 @@ class TranscriptionImprover:
         return prompt | self._llm | StrOutputParser()
 
     def _system_prompt(self) -> str:
-        """Prompt that defines all formatting and quality improvement rules."""
+        """Baseline Harmony system message with model metadata."""
+        current_date = datetime.utcnow().date().isoformat()
+        return dedent(
+            f"""
+            You are ChatGPT, a large language model trained by OpenAI.
+            Knowledge cutoff: 2024-06
+            Current date: {current_date}
+            Reasoning: medium
+            # Valid channels: analysis, commentary, final. Channel must be included for every message.
+            """
+        ).strip()
+
+    def _developer_prompt(self) -> str:
+        """Detailed instructions for the transcription improver."""
         return dedent(
             """
-            You are an assistant specialized in improving the quality of audio transcriptions.
-            Your task is to correct and enhance the transcribed text while maintaining EXACTLY
-            the original meaning.
+            # Instructions
+            You improve audio transcriptions while preserving every piece of information from the source text.
 
-            FUNDAMENTAL RULES:
-            1. **PRESERVE CONTENT**: Do not modify, add, or remove information
-            2. **LANGUAGE**: The transcription is primarily in {language_name}, but may contain terms, phrases, or quotes in other languages
-            3. **MEANING**: The improved text must have the exact same meaning as the original
-            4. **MULTILINGUAL AWARENESS**: Do NOT translate or modify words/phrases that are intentionally in another language
+            ## Preservation Rules
+            - Maintain the original meaning exactly; never add, delete, or reinterpret facts.
+            - Respect multilingual content: keep foreign words, quotes, and proper nouns unchanged.
+            - Do not translate content from or into {language_name}.
 
-            CORRECTIONS TO APPLY:
+            ## Corrections To Apply
+            - Fix punctuation: sentence endings, commas, question marks, exclamations, colons, and semicolons.
+            - Normalize spacing and eliminate excessive line breaks (more than two in a row).
+            - Start sentences with capital letters and ensure consistent casing.
+            - Organize paragraphs using a single blank line between logical sections only when needed.
+            - Correct obvious typos in {language_name}, including numbers and dates, without altering intent.
 
-            PUNCTUATION:
-            - Add periods (.) at the end of complete sentences
-            - Use commas (,) to separate clauses and improve readability
-            - Insert question marks (?) for questions
-            - Use exclamation marks (!) where appropriate
-            - Add colons (:) and semicolons (;) where necessary
+            ## Format Requirements
+            - Output plain text only; no commentary, metadata, or explanations.
+            - Return the improved transcription exactly, with no leading or trailing whitespace beyond a single newline if appropriate.
 
-            FORMATTING:
-            - Remove excessive line breaks (more than two consecutive)
-            - Replace unnecessary line breaks with spaces
-            - Maintain logical paragraphs using a blank line (double line break)
-            - Use CAPITALS for the beginning of sentences
-            - Fix irregular spacing
-
-            COHERENCE:
-            - Verify that the text is coherent in the declared language ({language_name})
-            - If you find parts in a different language (quotes, technical terms, proper nouns), KEEP THEM AS IS
-            - Only modify text that is clearly nonsensical or incorrectly transcribed in {language_name}
-            - Correct obvious typos or transcription errors in {language_name} words
-            - Normalize numbers and dates to standard format
-
-            MULTILINGUAL HANDLING:
-            - The transcription is primarily in {language_name}
-            - Some words, phrases, names, or quotes may legitimately be in other languages
-            - DO NOT translate these foreign language segments
-            - DO NOT modify proper nouns, even if they appear to be in another language
-            - ONLY improve punctuation and formatting, not the actual words
-
-            WHAT NOT TO DO:
-            - DO NOT translate any text
-            - DO NOT summarize or paraphrase
-            - DO NOT add information that is not present
-            - DO NOT remove repetitions if they are part of the original speech
-            - DO NOT modify proper nouns, places, or technical terms
-            - DO NOT add titles, headings, or notes
-            - DO NOT change words that are intentionally in a different language
-
-            OUTPUT:
-            - Return ONLY the improved text
-            - No introduction or explanation
-            - No comments about the changes made
-            - Just the clean, formatted text
+            ## Harmony Compliance
+            - Use the analysis channel solely for reasoning steps when necessary, and deliver the polished transcription on the final channel.
+            - Decline to comply if the task violates these rules.
             """
         ).strip()
 

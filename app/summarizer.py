@@ -7,7 +7,11 @@ from textwrap import dedent
 from typing import Any, Dict, List, Tuple
 
 from iso639 import Language
-from langchain_core.prompts import ChatPromptTemplate, FewShotChatMessagePromptTemplate
+from langchain_core.prompts import (
+    ChatPromptTemplate,
+    FewShotChatMessagePromptTemplate,
+    SystemMessagePromptTemplate,
+)
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import Runnable
 from langchain_ollama import ChatOllama
@@ -109,12 +113,13 @@ class ConversationSummarizer:
 
         final_prompt = ChatPromptTemplate.from_messages(
             [
-                ("system", self._system_prompt()),
+                SystemMessagePromptTemplate.from_template(self._system_prompt()),
+                SystemMessagePromptTemplate.from_template(self._developer_prompt()),
                 few_shot_prompt,
                 (
                     "human",
-                    "Conversation:\n{conversation}\n\n"
-                    "Generate a brief HTML summary (max 200 words).",
+                    "Conversation transcript:\n{conversation}\n\n"
+                    "Respond with a single HTML paragraph that follows every instruction.",
                 ),
             ]
         )
@@ -123,41 +128,77 @@ class ConversationSummarizer:
 
     def _system_prompt(self) -> str:
         """Prompt that defines all formatting and behavioural constraints."""
+        current_date = datetime.utcnow().date().isoformat()
+        return dedent(
+            f"""
+            You are ChatGPT, a large language model trained by OpenAI.
+            Knowledge cutoff: 2024-06
+            Current date: {current_date}
+            Reasoning: high
+            # Valid channels: analysis, commentary, final. Channel must be included for every message.
+            """
+        ).strip()
+
+    def _developer_prompt(self) -> str:
+        """Developer instructions rendered in Harmony-friendly layout."""
         return dedent(
             """
-            You are a concise conversation summariser. Follow these STRICT rules:
+            # Instructions
+            You are a concise conversation summariser. Obey every rule below without exception.
 
-            LANGUAGE:
-            - Always write the summary in {language_name}.
+            ## Language
+            - Write the final response in {language_name}.
 
-            OUTPUT FORMAT:
-            - Use ONLY HTML tags: <b>, <i>, <a href="URL">text</a>
-            - NO Markdown syntax (**, *, #, >, [], etc.)
-            - Maximum 200 words total
-            - Write as a flowing paragraph, NO lists or sections
+            ## Output Format
+            - Produce a single coherent paragraph no longer than 200 words.
+            - Allowed HTML tags: <b>, <i>, <a href="URL">text</a>.
+            - Do not emit Markdown, lists, headings, blockquotes, or horizontal rules.
+            - Keep explicit line breaks to a minimum; only use blank lines when strictly necessary.
 
-            HTML RULES:
-            - Bold: <b>text</b>
-            - Italic: <i>text</i>
-            - User links: <a href="tg://user?id=USER_ID">Name</a>
-            - Message links: <a href="https://t.me/c/{chat_id_for_link}/MSG_ID">"quoted text"</a>
-            - Line breaks: use \n\n sparingly
+            ## Linking
+            - Mention participants as <a href="tg://user?id=USER_ID">Name</a>.
+            - Reference important messages as <a href="https://t.me/c/{chat_id_for_link}/MSG_ID">"quoted text"</a>.
+            - Replace USER_ID and MSG_ID with the numeric identifiers from the transcript.
 
-            CONTENT RULES:
-            1. If messages are trivial (tests, greetings), write 1-2 sentences maximum
-            2. For substantive discussions, focus on key decisions and actions
-            3. Quote important messages using message links
-            4. Mention participants with user links when relevant
-            5. Audio transcriptions: briefly note as "messaggio vocale" or "messaggi vocali"
-            6. Keep tone neutral and professional
+            ## Content Rules
+            1. Summaries of trivial chatter (tests, greetings) must stay within two sentences.
+            2. Highlight key decisions, follow-ups, deadlines, and commitments.
+            3. Note audio messages succinctly as "messaggio vocale" or "messaggi vocali".
+            4. Maintain a neutral, factual tone.
 
-            STRICT PROHIBITIONS:
-            - NO headers (##, ###, etc.)
-            - NO bullet points or numbered lists
-            - NO blockquotes (>)
-            - NO Markdown link syntax []()
-            - NO section separators (---, ___)
-            - NO emojis in structure (only if quoting)
+            ## Harmony Compliance
+            - Emit reasoning steps on the analysis channel when required, and place the polished answer on the final channel only.
+            - Never fabricate information that is not present in the transcript.
+
+            # Exemplars
+            Conversation:
+            Simone (ID: 265699760) at 23:45 [MSG_ID: 21526]:
+            Test
+
+            Simone (ID: 265699760) at 23:46 [MSG_ID: 21527]:
+            Test
+
+            Simone (ID: 265699760) at 23:47 [MSG_ID: 21528]:
+            Prova
+
+            Summary:
+            <a href="tg://user?id=265699760">Simone</a> ha inviato alcuni messaggi di test tra le 23:45 e le 23:47.
+
+            Conversation:
+            Mario (ID: 123456) at 14:30 [MSG_ID: 100]:
+            Dobbiamo organizzare l'evento di domani
+
+            Luigi (ID: 789012) at 14:32 [MSG_ID: 101]:
+            Sì, propongo di trovarci alle 15:00
+
+            Mario (ID: 123456) at 14:35 [MSG_ID: 102]:
+            Perfetto, confermo
+
+            Luigi (ID: 789012) at 14:36 [MSG_ID: 103]:
+            [AUDIO TRASCRITTO]: Vi aspetto in piazza alle tre del pomeriggio
+
+            Summary:
+            <a href="tg://user?id=123456">Mario</a> e <a href="tg://user?id=789012">Luigi</a> hanno organizzato un incontro per domani. Luigi ha <a href="https://t.me/c/CHAT_ID/101">proposto di trovarsi alle 15:00</a> e ha confermato tramite messaggio vocale l'appuntamento in piazza.
             """
         ).strip()
 

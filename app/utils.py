@@ -103,6 +103,19 @@ def split_message(text: str, max_length: int = TELEGRAM_MAX_MESSAGE_LENGTH) -> l
             words = sentence.split()
             temp_chunk = ""
             for word in words:
+                # If a single word is longer than max_length, slice it into parts
+                if len(word) > max_length:
+                    # flush any pending temp_chunk
+                    if temp_chunk:
+                        chunks.append(temp_chunk.strip())
+                        temp_chunk = ""
+                    # split the long word into fixed-size pieces
+                    for i in range(0, len(word), max_length):
+                        part = word[i:i+max_length]
+                        chunks.append(part)
+                    # continue to next word
+                    continue
+
                 if len(temp_chunk) + len(word) + 1 <= max_length:
                     temp_chunk += word + " "
                 else:

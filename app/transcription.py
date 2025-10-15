@@ -93,7 +93,7 @@ class Transcriber:
             logger.info("Transcription found in cache.")
             # Add the transcription as a message (only for groups - privacy)
             if group_id:
-                message = self.db.add_message(
+                self.db.add_message(
                     group_id=group_id,
                     user_id=user_id,
                     author_name=author_name,
@@ -173,7 +173,7 @@ class Transcriber:
                     # Add the transcription as a message (only for groups - privacy)
                     message_id = None
                     if group_id:
-                        message = self.db.add_message(
+                        message_id = self.db.add_message(
                             group_id=group_id,
                             user_id=user_id,
                             author_name=author_name,
@@ -181,8 +181,6 @@ class Transcriber:
                             timestamp=timestamp,
                             telegram_message_id=telegram_message_id
                         )
-                        # Get the message_id for foreign key reference
-                        message_id = message.message_id if message else None
                     
                     # Save transcription to DB with message_id link (privacy: only for groups)
                     self.db.save_transcription(

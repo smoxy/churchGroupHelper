@@ -641,7 +641,7 @@ class Database:
         message_text: Optional[str], 
         timestamp: datetime,
         telegram_message_id: Optional[int] = None
-    ) -> Optional[Message]:
+    ) -> Optional[int]:
         """
         Add a message to the database.
         
@@ -654,7 +654,7 @@ class Database:
             telegram_message_id: Telegram's message ID for creating links
             
         Returns:
-            Created Message object or None if group_id is None
+            Message ID or None if group_id is None
         """
         if group_id is None:
             return None
@@ -670,7 +670,7 @@ class Database:
             )
             session.add(message)
             session.flush()
-            return message
+            return message.message_id
 
     def get_messages(
         self, 

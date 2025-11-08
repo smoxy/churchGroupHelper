@@ -12,7 +12,10 @@ from transcription import Transcriber
 from summarizer import create_summarizer
 from utils import TOKEN, is_admin, TMP_DIR, send_action, split_message
 from datetime import datetime
+from church_menu import create_church_conversation_handler
 from birthday_manager import create_birthday_conversation_handler
+from birthday_admin_commands import register_birthday_admin_commands
+from birthday_scheduler import setup_birthday_scheduler
 
 # Enable logging with configurable level
 LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO').upper()
@@ -314,19 +317,8 @@ async def summarize(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Non ci sono messaggi da riassumere.")
         return
 
-    # Use LangChain-based summarizer for better prompt adherence
+    # Use LangChain-based summarizer with auto-detected provider (OpenAI or Ollama)
     try:
-        # Check if API key is set
-        api_key = os.getenv('OLLAMA_API_KEY')
-        if not api_key:
-            logger.error("OLLAMA_API_KEY not found in environment variables")
-            await update.message.reply_text(
-                "⚠️ Configurazione mancante: OLLAMA_API_KEY non impostata. "
-                "Contatta l'amministratore del bot.",
-                parse_mode='HTML'
-            )
-            return
-        
         logger.info(f"Starting summary generation for group {chat.id} ({chat.title})")
         logger.info(f"Summary includes {len(all_content)} items (messages + transcriptions)")
         
@@ -338,7 +330,8 @@ async def summarize(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # Create summarizer instance
         logger.info("Initializing LangChain summarizer with gpt-oss:120b model")
-        summarizer = create_summarizer(api_key)
+        # Create summarizer (auto-detects OpenAI or Ollama)
+        summarizer = create_summarizer()
         
         # Generate summary using LangChain
         logger.info("Generating summary with LangChain chain")
@@ -560,6 +553,12 @@ def main():
     
     # Birthday management conversation handler
     application.add_handler(create_birthday_conversation_handler(db))
+    
+    # Birthday admin commands (settings, preview, stats, import)
+    register_birthday_admin_commands(application, db)
+    
+    # Setup birthday scheduler (daily checks)
+    setup_birthday_scheduler(application, db)
 
     # Message handlers
     application.add_handler(MessageHandler(filters.VOICE | filters.AUDIO | filters.VIDEO_NOTE, transcribe_audio))

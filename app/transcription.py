@@ -20,16 +20,14 @@ class Transcriber:
         self.service_url = WHISPER_SERVICE_URL
         logger.info(f"Whisper service URL: {self.service_url}")
         
-        # Initialize transcription improver if API key is available
+        # Initialize transcription improver (auto-detects OpenAI or Ollama)
         self.improver = None
-        if OLLAMA_API_KEY:
-            try:
-                self.improver = create_improver(OLLAMA_API_KEY, TRANSCRIPTION_IMPROVER_MODEL)
-                logger.info(f"Transcription improver initialized with model: {TRANSCRIPTION_IMPROVER_MODEL}")
-            except Exception as e:
-                logger.warning(f"Failed to initialize transcription improver: {e}")
-        else:
-            logger.info("OLLAMA_API_KEY not set, transcription improvement disabled")
+        try:
+            self.improver = create_improver(model_name=TRANSCRIPTION_IMPROVER_MODEL)
+            logger.info(f"Transcription improver initialized (auto-detected provider)")
+        except Exception as e:
+            logger.warning(f"Failed to initialize transcription improver: {e}")
+            logger.info("Transcription improvement will be disabled")
 
     def valid_languages(self):
         # Lista delle lingue supportate da Whisper

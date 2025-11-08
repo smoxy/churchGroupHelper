@@ -24,7 +24,7 @@ from sqlalchemy.pool import StaticPool
 
 from models import (
     Base, User, Church, AuthorizedGroup, AuthorizedUser,
-    Message, Transcription, Birthday
+    Message, Transcription, Birthday, BiblicalText, BirthdayMessage
 )
 
 # Enable logging
@@ -1244,6 +1244,506 @@ class Database:
                 }
                 for g in groups
             ]
+
+    # ==================== Birthday Notification Settings ====================
+    
+    def update_group_birthday_settings(
+        self,
+        group_id: int,
+        timezone: Optional[str] = None,
+        birthday_send_time: Optional[str] = None,
+        birthday_mention_enabled: Optional[int] = None,
+        birthday_ai_enabled: Optional[int] = None,
+        birthday_retry_days: Optional[int] = None
+    ) -> bool:
+        """
+        Update birthday notification settings for a group.
+        
+        Args:
+            group_id: The Telegram group ID
+            timezone: IANA timezone string (e.g., 'Europe/Rome')
+            birthday_send_time: Time to send messages (HH:MM format)
+            birthday_mention_enabled: 0=no mention, 1=mention if telegram_user_id present
+            birthday_ai_enabled: 0=static template, 1=AI-generated
+            birthday_retry_days: Days to retry failed messages
+            
+        Returns:
+            True if updated successfully, False otherwise
+        """
+        with self.get_session() as session:
+            try:
+                group = session.query(AuthorizedGroup).filter_by(group_id=group_id).first()
+                if not group:
+                    logger.warning(f"Group {group_id} not found for birthday settings update")
+                    return False
+                
+                if timezone is not None:
+                    group.timezone = timezone
+                if birthday_send_time is not None:
+                    group.birthday_send_time = birthday_send_time
+                if birthday_mention_enabled is not None:
+                    group.birthday_mention_enabled = birthday_mention_enabled
+                if birthday_ai_enabled is not None:
+                    group.birthday_ai_enabled = birthday_ai_enabled
+                if birthday_retry_days is not None:
+                    group.birthday_retry_days = birthday_retry_days
+                
+                session.commit()
+                logger.info(f"Updated birthday settings for group {group_id}")
+                return True
+            except Exception as e:
+                session.rollback()
+                logger.error(f"Error updating birthday settings for group {group_id}: {e}")
+                return False
+
+    def get_group_birthday_settings(self, group_id: int) -> Optional[Dict[str, Any]]:
+        """
+        Get birthday notification settings for a group.
+        
+        Args:
+            group_id: The Telegram group ID
+            
+        Returns:
+            Dictionary with birthday settings or None if group not found
+        """
+        with self.get_session() as session:
+            group = session.query(AuthorizedGroup).filter_by(group_id=group_id).first()
+            if not group:
+                return None
+            
+            return {
+                'group_id': group.group_id,
+                'group_name': group.group_name,
+                'timezone': group.timezone,
+                'birthday_send_time': group.birthday_send_time,
+                'birthday_mention_enabled': group.birthday_mention_enabled,
+                'birthday_ai_enabled': group.birthday_ai_enabled,
+                'birthday_retry_days': group.birthday_retry_days
+            }
+
+    # ==================== Biblical Texts Management ====================
+    
+    def add_biblical_text(
+        self,
+        group_id: int,
+        reference: str,
+        text: str,
+        language: str = 'it',
+        theme: Optional[str] = None,
+        age_min: Optional[int] = None,
+        age_max: Optional[int] = None,
+        gender_preference: Optional[str] = None
+    ) -> Optional[int]:
+        """
+        Add a new biblical text to a group's collection.
+        
+        Args:
+            group_id: The Telegram group ID
+            reference: Biblical reference (e.g., "Giovanni 3:16")
+            text: The biblical text content
+            language: Language of the text (default: 'it')
+            theme: Optional theme/category
+            age_min: Minimum age suitability (null = any age)
+            age_max: Maximum age suitability (null = any age)
+            gender_preference: 'M', 'F', or null for any gender
+            
+        Returns:
+            ID of created biblical text or None if failed
+        """
+        with self.get_session() as session:
+            try:
+                biblical_text = BiblicalText(
+                    group_id=group_id,
+                    reference=reference,
+                    text=text,
+                    language=language,
+                    theme=theme,
+                    age_min=age_min,
+                    age_max=age_max,
+                    gender_preference=gender_preference,
+                    created_at=datetime.now()
+                )
+                session.add(biblical_text)
+                session.commit()
+                session.refresh(biblical_text)
+                logger.info(f"Added biblical text {biblical_text.id} for group {group_id}: {reference}")
+                return biblical_text.id
+            except Exception as e:
+                session.rollback()
+                logger.error(f"Error adding biblical text for group {group_id}: {e}")
+                return None
+
+    def get_biblical_texts(
+        self,
+        group_id: int,
+        language: Optional[str] = None,
+        age: Optional[int] = None,
+        gender: Optional[str] = None,
+        exclude_last_n: int = 0
+    ) -> List[Dict[str, Any]]:
+        """
+        Get biblical texts for a group with optional filtering.
+        
+        Args:
+            group_id: The Telegram group ID
+            language: Filter by language
+            age: Filter by age suitability
+            gender: Filter by gender preference ('M' or 'F')
+            exclude_last_n: Exclude the N most recently used texts
+            
+        Returns:
+            List of dictionaries with biblical text data
+        """
+        with self.get_session() as session:
+            query = session.query(BiblicalText).filter_by(group_id=group_id)
+            
+            # Apply filters
+            if language:
+                query = query.filter(BiblicalText.language == language)
+            
+            if age is not None:
+                query = query.filter(
+                    or_(
+                        BiblicalText.age_min == None,
+                        BiblicalText.age_min <= age
+                    )
+                ).filter(
+                    or_(
+                        BiblicalText.age_max == None,
+                        BiblicalText.age_max >= age
+                    )
+                )
+            
+            if gender:
+                query = query.filter(
+                    or_(
+                        BiblicalText.gender_preference == None,
+                        BiblicalText.gender_preference == gender
+                    )
+                )
+            
+            # Order by last_used_at (nulls first = never used)
+            query = query.order_by(BiblicalText.last_used_at.asc().nullsfirst())
+            
+            # Get results
+            results = query.all()
+            
+            # Exclude last N used
+            if exclude_last_n > 0:
+                # Get the N most recently used texts
+                recently_used = session.query(BiblicalText).filter_by(group_id=group_id)\
+                    .filter(BiblicalText.last_used_at != None)\
+                    .order_by(BiblicalText.last_used_at.desc())\
+                    .limit(exclude_last_n).all()
+                
+                recently_used_ids = {text.id for text in recently_used}
+                results = [text for text in results if text.id not in recently_used_ids]
+            
+            return [
+                {
+                    'id': text.id,
+                    'group_id': text.group_id,
+                    'reference': text.reference,
+                    'text': text.text,
+                    'language': text.language,
+                    'theme': text.theme,
+                    'age_min': text.age_min,
+                    'age_max': text.age_max,
+                    'gender_preference': text.gender_preference,
+                    'last_used_at': text.last_used_at,
+                    'created_at': text.created_at
+                }
+                for text in results
+            ]
+
+    def update_biblical_text_last_used(self, text_id: int) -> bool:
+        """
+        Update the last_used_at timestamp for a biblical text.
+        
+        Args:
+            text_id: ID of the biblical text
+            
+        Returns:
+            True if updated successfully, False otherwise
+        """
+        with self.get_session() as session:
+            try:
+                text = session.query(BiblicalText).filter_by(id=text_id).first()
+                if not text:
+                    logger.warning(f"Biblical text {text_id} not found")
+                    return False
+                
+                text.last_used_at = datetime.now()
+                session.commit()
+                logger.info(f"Updated last_used_at for biblical text {text_id}")
+                return True
+            except Exception as e:
+                session.rollback()
+                logger.error(f"Error updating biblical text {text_id}: {e}")
+                return False
+
+    def delete_biblical_text(self, text_id: int) -> bool:
+        """
+        Delete a biblical text.
+        
+        Args:
+            text_id: ID of the biblical text to delete
+            
+        Returns:
+            True if deleted successfully, False otherwise
+        """
+        with self.get_session() as session:
+            try:
+                text = session.query(BiblicalText).filter_by(id=text_id).first()
+                if not text:
+                    logger.warning(f"Biblical text {text_id} not found")
+                    return False
+                
+                session.delete(text)
+                session.commit()
+                logger.info(f"Deleted biblical text {text_id}")
+                return True
+            except Exception as e:
+                session.rollback()
+                logger.error(f"Error deleting biblical text {text_id}: {e}")
+                return False
+
+    # ==================== Birthday Messages Tracking ====================
+    
+    def create_birthday_message(
+        self,
+        birthday_id: int,
+        group_id: int,
+        birthday_year: int,
+        biblical_text_id: Optional[int] = None,
+        generated_message: Optional[str] = None,
+        message_hash: Optional[str] = None
+    ) -> Optional[int]:
+        """
+        Create a new birthday message record (pending status).
+        
+        Args:
+            birthday_id: ID of the birthday
+            group_id: Telegram group ID
+            birthday_year: Year of this birthday celebration
+            biblical_text_id: ID of biblical text used (if any)
+            generated_message: Full generated message text
+            message_hash: SHA256 hash of message (privacy alternative)
+            
+        Returns:
+            ID of created birthday message or None if failed
+        """
+        with self.get_session() as session:
+            try:
+                birthday_message = BirthdayMessage(
+                    birthday_id=birthday_id,
+                    group_id=group_id,
+                    birthday_year=birthday_year,
+                    biblical_text_id=biblical_text_id,
+                    generated_message=generated_message,
+                    message_hash=message_hash,
+                    status='pending',
+                    retry_count=0,
+                    created_at=datetime.now(),
+                    updated_at=datetime.now()
+                )
+                session.add(birthday_message)
+                session.commit()
+                session.refresh(birthday_message)
+                logger.info(f"Created birthday message {birthday_message.id} for birthday {birthday_id}")
+                return birthday_message.id
+            except Exception as e:
+                session.rollback()
+                logger.error(f"Error creating birthday message: {e}")
+                return None
+
+    def update_birthday_message_sent(
+        self,
+        message_id: int,
+        telegram_message_id: int
+    ) -> bool:
+        """
+        Mark a birthday message as successfully sent.
+        
+        Args:
+            message_id: ID of the birthday message record
+            telegram_message_id: Telegram's message ID
+            
+        Returns:
+            True if updated successfully, False otherwise
+        """
+        with self.get_session() as session:
+            try:
+                birthday_msg = session.query(BirthdayMessage).filter_by(id=message_id).first()
+                if not birthday_msg:
+                    logger.warning(f"Birthday message {message_id} not found")
+                    return False
+                
+                birthday_msg.sent_at = datetime.now()
+                birthday_msg.telegram_message_id = telegram_message_id
+                birthday_msg.status = 'sent'
+                birthday_msg.updated_at = datetime.now()
+                
+                session.commit()
+                logger.info(f"Marked birthday message {message_id} as sent")
+                return True
+            except Exception as e:
+                session.rollback()
+                logger.error(f"Error updating birthday message {message_id}: {e}")
+                return False
+
+    def update_birthday_message_failed(
+        self,
+        message_id: int,
+        error_message: str
+    ) -> bool:
+        """
+        Mark a birthday message as failed with error details.
+        
+        Args:
+            message_id: ID of the birthday message record
+            error_message: Error details
+            
+        Returns:
+            True if updated successfully, False otherwise
+        """
+        with self.get_session() as session:
+            try:
+                birthday_msg = session.query(BirthdayMessage).filter_by(id=message_id).first()
+                if not birthday_msg:
+                    logger.warning(f"Birthday message {message_id} not found")
+                    return False
+                
+                birthday_msg.status = 'failed'
+                birthday_msg.error_message = error_message
+                birthday_msg.retry_count += 1
+                birthday_msg.updated_at = datetime.now()
+                
+                session.commit()
+                logger.info(f"Marked birthday message {message_id} as failed (retry {birthday_msg.retry_count})")
+                return True
+            except Exception as e:
+                session.rollback()
+                logger.error(f"Error updating birthday message {message_id}: {e}")
+                return False
+
+    def get_birthday_message(
+        self,
+        birthday_id: int,
+        group_id: int,
+        birthday_year: int
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Get existing birthday message record for idempotency check.
+        
+        Args:
+            birthday_id: ID of the birthday
+            group_id: Telegram group ID
+            birthday_year: Year of birthday celebration
+            
+        Returns:
+            Dictionary with birthday message data or None if not found
+        """
+        with self.get_session() as session:
+            msg = session.query(BirthdayMessage).filter_by(
+                birthday_id=birthday_id,
+                group_id=group_id,
+                birthday_year=birthday_year
+            ).first()
+            
+            if not msg:
+                return None
+            
+            return {
+                'id': msg.id,
+                'birthday_id': msg.birthday_id,
+                'group_id': msg.group_id,
+                'biblical_text_id': msg.biblical_text_id,
+                'status': msg.status,
+                'retry_count': msg.retry_count,
+                'sent_at': msg.sent_at,
+                'telegram_message_id': msg.telegram_message_id,
+                'error_message': msg.error_message,
+                'birthday_year': msg.birthday_year,
+                'created_at': msg.created_at
+            }
+
+    def get_failed_birthday_messages(
+        self,
+        max_retry_days: int = 2
+    ) -> List[Dict[str, Any]]:
+        """
+        Get birthday messages that failed and are within retry window.
+        
+        Args:
+            max_retry_days: Maximum days to retry failed messages
+            
+        Returns:
+            List of dictionaries with birthday message data
+        """
+        with self.get_session() as session:
+            cutoff_date = datetime.now() - timedelta(days=max_retry_days)
+            
+            messages = session.query(BirthdayMessage).filter(
+                BirthdayMessage.status == 'failed',
+                BirthdayMessage.created_at >= cutoff_date
+            ).all()
+            
+            return [
+                {
+                    'id': msg.id,
+                    'birthday_id': msg.birthday_id,
+                    'group_id': msg.group_id,
+                    'biblical_text_id': msg.biblical_text_id,
+                    'status': msg.status,
+                    'retry_count': msg.retry_count,
+                    'error_message': msg.error_message,
+                    'birthday_year': msg.birthday_year,
+                    'created_at': msg.created_at
+                }
+                for msg in messages
+            ]
+
+    def get_birthday_messages_stats(
+        self,
+        group_id: Optional[int] = None,
+        days: int = 30
+    ) -> Dict[str, Any]:
+        """
+        Get statistics about birthday messages.
+        
+        Args:
+            group_id: Optional group ID to filter by
+            days: Number of days to look back
+            
+        Returns:
+            Dictionary with statistics
+        """
+        with self.get_session() as session:
+            cutoff_date = datetime.now() - timedelta(days=days)
+            
+            query = session.query(BirthdayMessage).filter(
+                BirthdayMessage.created_at >= cutoff_date
+            )
+            
+            if group_id:
+                query = query.filter(BirthdayMessage.group_id == group_id)
+            
+            messages = query.all()
+            
+            total = len(messages)
+            sent = len([m for m in messages if m.status == 'sent'])
+            failed = len([m for m in messages if m.status == 'failed'])
+            pending = len([m for m in messages if m.status == 'pending'])
+            
+            return {
+                'total': total,
+                'sent': sent,
+                'failed': failed,
+                'pending': pending,
+                'success_rate': (sent / total * 100) if total > 0 else 0,
+                'days': days
+            }
 
     # ==================== Utility Methods ====================
     

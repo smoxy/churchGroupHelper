@@ -14,7 +14,8 @@ from langchain_core.prompts import (
 )
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import Runnable
-from langchain_ollama import ChatOllama
+
+from ai_provider import get_chat_llm, detect_ai_provider
 
 logger = logging.getLogger(__name__)
 
@@ -35,18 +36,26 @@ _SUMMARIZER_CACHE: Dict[str, "ConversationSummarizer"] = {}
 class ConversationSummarizer:
     """Encapsulates the LangChain summarisation pipeline for chat transcripts."""
 
-    def __init__(self, api_key: str) -> None:
-        """Initialise the LangChain model stack."""
-        self._api_key = api_key
-        self._llm = ChatOllama(
-            base_url="https://ollama.com",
-            model="gpt-oss:120b",
-            temperature=0.3,
-            client_kwargs={
-                "headers": {
-                    "Authorization": f"Bearer {api_key}"
-                }
-            }
+    def __init__(self, api_key: str = None) -> None:
+        """
+        Initialise the LangChain model stack.
+        
+        Args:
+            api_key: Optional API key (for backwards compatibility, now uses env vars)
+        """
+        # Detect provider and get appropriate LLM
+        provider = detect_ai_provider()
+        
+        # Use larger model for summaries (more context needed)
+        if provider == 'openai':
+            model_override = 'gpt-5-mini'
+        else:
+            model_override = 'gpt-oss:120b'  # Larger Ollama model for better summaries
+        
+        self._llm = get_chat_llm(
+            provider=provider,
+            temperature=0.3,  # Lower temperature for more focused summaries
+            model_override=model_override
         )
         self._chain = self._build_chain()
 
@@ -309,8 +318,18 @@ def _resolve_language_name(language: str | None) -> str:
     return str(language).capitalize()
 
 
-def create_summarizer(api_key: str) -> ConversationSummarizer:
-    """Return a cached ConversationSummarizer instance for the provided API key."""
-    if api_key not in _SUMMARIZER_CACHE:
-        _SUMMARIZER_CACHE[api_key] = ConversationSummarizer(api_key)
-    return _SUMMARIZER_CACHE[api_key]
+def create_summarizer(api_key: str = None) -> ConversationSummarizer:
+    """
+    Return a cached ConversationSummarizer instance.
+    
+    Args:
+        api_key: Optional (for backwards compatibility, no longer used)
+        
+    Returns:
+        ConversationSummarizer instance
+    """
+    # Use provider as cache key instead of API key
+    cache_key = detect_ai_provider()
+    if cache_key not in _SUMMARIZER_CACHE:
+        _SUMMARIZER_CACHE[cache_key] = ConversationSummarizer()
+    return _SUMMARIZER_CACHE[cache_key]

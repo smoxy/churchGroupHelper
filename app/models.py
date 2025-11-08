@@ -17,7 +17,7 @@ Base = declarative_base()
 
 # Import Birthday in models export
 __all__ = ['Base', 'User', 'Church', 'AuthorizedGroup', 'AuthorizedUser', 
-           'Message', 'Transcription', 'Birthday']
+           'Message', 'Transcription', 'Birthday', 'BiblicalText', 'BirthdayMessage']
 
 
 class User(Base):
@@ -71,6 +71,7 @@ class AuthorizedGroup(Base):
     """
     Represents a Telegram group authorized to use the bot.
     Contains settings for message limits, language preferences, and cleanup policies.
+    Also manages birthday notification settings per group.
     """
     __tablename__ = 'authorized_groups'
 
@@ -81,12 +82,21 @@ class AuthorizedGroup(Base):
     message_limit = Column(Integer, default=500)
     time_limit = Column(Integer, default=30)  # Days to keep messages
     last_cleanup = Column(DateTime, nullable=True)
+    
+    # Birthday notification settings
+    timezone = Column(String, default='Europe/Rome')  # IANA timezone for this group
+    birthday_send_time = Column(String, default='09:00')  # Time to send birthday messages (HH:MM format)
+    birthday_mention_enabled = Column(Integer, default=0)  # 0=no mention, 1=mention if telegram_user_id present
+    birthday_ai_enabled = Column(Integer, default=1)  # 0=static template, 1=AI-generated
+    birthday_retry_days = Column(Integer, default=2)  # Days to retry failed birthday messages
 
     # Relationships
     church = relationship('Church', back_populates='groups')
     users = relationship('User', back_populates='church_group')
     messages = relationship('Message', back_populates='group', cascade='all, delete-orphan')
     transcriptions = relationship('Transcription', back_populates='group')
+    biblical_texts = relationship('BiblicalText', back_populates='group', cascade='all, delete-orphan')
+    birthday_messages = relationship('BirthdayMessage', back_populates='group', cascade='all, delete-orphan')
 
     def __repr__(self):
         return f"<AuthorizedGroup(group_id={self.group_id}, name='{self.group_name}')>"
@@ -170,9 +180,89 @@ class Birthday(Base):
     comment = Column(String, nullable=True)
     group_ids = Column(JSON, nullable=False, default=list)  # List of group IDs where to announce birthday
     telegram_user_id = Column(Integer, nullable=True)  # Optional: Telegram user ID for mentions/links
+    
+    # Privacy and personalization settings
+    gender_override = Column(String, nullable=True)  # 'M', 'F', or null for auto-detection
+    mention_opt_out = Column(Integer, default=0)  # 0=allow mention (if telegram_user_id), 1=never mention
+    age_display = Column(Integer, default=1)  # 0=never show age, 1=show age (user-level config)
+    
     created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc), 
                        onupdate=lambda: datetime.now(timezone.utc))
+    
+    # Relationships
+    birthday_messages = relationship('BirthdayMessage', back_populates='birthday', cascade='all, delete-orphan')
 
     def __repr__(self):
         return f"<Birthday(id={self.id}, name='{self.first_name} {self.last_name}', birth_date='{self.birth_date}', telegram_user_id={self.telegram_user_id})>"
+
+
+class BiblicalText(Base):
+    """
+    Stores biblical texts used for birthday messages.
+    Texts are associated with specific groups and can be filtered by age/gender suitability.
+    Each group manages its own collection of biblical texts.
+    """
+    __tablename__ = 'biblical_texts'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    group_id = Column(Integer, ForeignKey('authorized_groups.group_id'), nullable=False)
+    reference = Column(String, nullable=False)  # e.g., "Giovanni 3:16", "Salmo 23:1"
+    text = Column(Text, nullable=False)  # The biblical text content
+    language = Column(String, default='it')  # Language of the text
+    theme = Column(String, nullable=True)  # Optional theme (e.g., "speranza", "amore", "fede")
+    
+    # Suitability filters for smart selection
+    age_min = Column(Integer, nullable=True)  # Minimum age suitability (null = any age)
+    age_max = Column(Integer, nullable=True)  # Maximum age suitability (null = any age)
+    gender_preference = Column(String, nullable=True)  # 'M', 'F', or null for any gender
+    
+    created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+    last_used_at = Column(DateTime, nullable=True)  # Track when last used globally (across all birthdays)
+    
+    # Relationships
+    group = relationship('AuthorizedGroup', back_populates='biblical_texts')
+    birthday_messages = relationship('BirthdayMessage', back_populates='biblical_text')
+
+    def __repr__(self):
+        return f"<BiblicalText(id={self.id}, group_id={self.group_id}, reference='{self.reference}')>"
+
+
+class BirthdayMessage(Base):
+    """
+    Tracks birthday messages sent to groups.
+    Used for idempotency (avoid duplicate sends) and retry logic.
+    Stores metadata about when messages were sent and their delivery status.
+    """
+    __tablename__ = 'birthday_messages'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    birthday_id = Column(Integer, ForeignKey('birthdays.id'), nullable=False)
+    group_id = Column(Integer, ForeignKey('authorized_groups.group_id'), nullable=False)
+    biblical_text_id = Column(Integer, ForeignKey('biblical_texts.id'), nullable=True)  # Which text was used
+    
+    # Message content and metadata
+    generated_message = Column(Text, nullable=True)  # Full generated message (stored for logging/debugging)
+    message_hash = Column(String, nullable=True)  # SHA256 hash for privacy (alternative to storing full text)
+    
+    # Delivery tracking
+    sent_at = Column(DateTime, nullable=True)  # When successfully sent (null = not sent yet)
+    telegram_message_id = Column(Integer, nullable=True)  # Telegram's message ID if sent successfully
+    status = Column(String, default='pending')  # 'pending', 'sent', 'failed', 'retrying'
+    retry_count = Column(Integer, default=0)  # Number of retry attempts
+    error_message = Column(Text, nullable=True)  # Error details if failed
+    
+    # Birthday year tracking (for idempotency across years)
+    birthday_year = Column(Integer, nullable=False)  # Year this birthday was celebrated (e.g., 2025)
+    
+    created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc), 
+                       onupdate=lambda: datetime.now(timezone.utc))
+    
+    # Relationships
+    birthday = relationship('Birthday', back_populates='birthday_messages')
+    group = relationship('AuthorizedGroup', back_populates='birthday_messages')
+    biblical_text = relationship('BiblicalText', back_populates='birthday_messages')
+
+    def __repr__(self):
+        return f"<BirthdayMessage(id={self.id}, birthday_id={self.birthday_id}, group_id={self.group_id}, status='{self.status}', year={self.birthday_year})>"

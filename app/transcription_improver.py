@@ -10,7 +10,8 @@ from iso639 import Language
 from langchain_core.prompts import ChatPromptTemplate, SystemMessagePromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import Runnable
-from langchain_ollama import ChatOllama
+
+from ai_provider import get_chat_llm, detect_ai_provider
 
 logger = logging.getLogger(__name__)
 
@@ -21,28 +22,31 @@ _IMPROVER_CACHE: Dict[str, "TranscriptionImprover"] = {}
 class TranscriptionImprover:
     """Encapsulates the LangChain pipeline for improving transcription quality."""
 
-    def __init__(self, api_key: str, model_name: str = "gpt-oss:20b") -> None:
+    def __init__(self, api_key: str = None, model_name: str = None) -> None:
         """
         Initialise the LangChain model stack for transcription improvement.
         
         Args:
-            api_key: Ollama API key for authentication
-            model_name: Model to use for improvement (default: gpt-oss:20b)
+            api_key: Optional API key (for backwards compatibility, now uses env vars)
+            model_name: Optional model override (uses provider defaults if None)
         """
-        self._api_key = api_key
-        self._model_name = model_name
-        self._llm = ChatOllama(
-            base_url="https://ollama.com",
-            model=model_name,
+        # Detect provider and get appropriate LLM
+        provider = detect_ai_provider()
+        
+        # Use appropriate model for transcription improvement
+        if model_name is None:
+            if provider == 'openai':
+                model_name = 'gpt-5-nano'
+            else:
+                model_name = 'gpt-oss:20b'  # Default Ollama model
+        
+        self._llm = get_chat_llm(
+            provider=provider,
             temperature=0.2,  # Lower temperature for more consistent formatting
-            client_kwargs={
-                "headers": {
-                    "Authorization": f"Bearer {api_key}"
-                }
-            }
+            model_override=model_name
         )
         self._chain = self._build_chain()
-        logger.info(f"TranscriptionImprover initialized with model: {model_name}")
+        logger.info(f"TranscriptionImprover initialized with provider: {provider}, model: {model_name}")
 
     @property
     def chain(self) -> Runnable[Dict[str, str], str]:
@@ -207,26 +211,28 @@ class TranscriptionImprover:
         return language.capitalize()
 
 
-def create_improver(api_key: str, model_name: Optional[str] = None) -> TranscriptionImprover:
+def create_improver(api_key: str = None, model_name: Optional[str] = None) -> TranscriptionImprover:
     """
-    Return a cached TranscriptionImprover instance for the provided API key and model.
+    Return a cached TranscriptionImprover instance.
     
     Args:
-        api_key: Ollama API key
-        model_name: Model to use (default: reads from TRANSCRIPTION_IMPROVER_MODEL env var
-                   or falls back to "gpt-oss:20b")
+        api_key: Optional (for backwards compatibility, no longer used)
+        model_name: Optional model override (uses provider defaults if None)
                    
     Returns:
         Cached or new TranscriptionImprover instance
     """
-    # Get model from env var if not provided
+    # Use provider + model as cache key
+    provider = detect_ai_provider()
     if model_name is None:
-        model_name = os.getenv('TRANSCRIPTION_IMPROVER_MODEL', 'gpt-oss:20b')
+        model_name = os.getenv('TRANSCRIPTION_IMPROVER_MODEL', '')
     
-    cache_key = f"{api_key}:{model_name}"
+    cache_key = f"{provider}:{model_name}" if model_name else provider
     
     if cache_key not in _IMPROVER_CACHE:
-        logger.info(f"Creating new TranscriptionImprover with model: {model_name}")
-        _IMPROVER_CACHE[cache_key] = TranscriptionImprover(api_key, model_name)
+        logger.info(f"Creating new TranscriptionImprover with provider: {provider}, model: {model_name or 'default'}")
+        _IMPROVER_CACHE[cache_key] = TranscriptionImprover(model_name=model_name or None)
     
+    return _IMPROVER_CACHE[cache_key]
+
     return _IMPROVER_CACHE[cache_key]

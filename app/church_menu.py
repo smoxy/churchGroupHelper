@@ -52,9 +52,9 @@ async def set_address(update, context, church_id: int, latitude: float, longitud
     try:
         # Get addresses from coordinates
         locations = geolocator.reverse(
-            (latitude, longitude), 
-            exactly_one=False, 
-            timeout=5, 
+            (latitude, longitude),
+            exactly_one=False,
+            timeout=5,
             language=lang
         )
         

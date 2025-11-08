@@ -6,14 +6,18 @@ Each model represents a table in the database with proper relationships and cons
 """
 
 from sqlalchemy import (
-    Column, Integer, String, Text, Float, DateTime, Date, 
+    Column, Integer, String, Text, Float, DateTime, Date,
     ForeignKey, JSON, Table
 )
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
-from datetime import datetime
+from datetime import datetime, timezone
 
 Base = declarative_base()
+
+# Import Birthday in models export
+__all__ = ['Base', 'User', 'Church', 'AuthorizedGroup', 'AuthorizedUser', 
+           'Message', 'Transcription', 'Birthday']
 
 
 class User(Base):
@@ -115,7 +119,7 @@ class Message(Base):
     user_id = Column(Integer, nullable=True)
     author_name = Column(String, nullable=False)
     message_text = Column(Text, nullable=True)
-    timestamp = Column(DateTime, nullable=False, default=datetime.utcnow)
+    timestamp = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
     telegram_message_id = Column(Integer, nullable=True)  # Telegram's message ID for creating links
 
     # Relationships
@@ -139,7 +143,7 @@ class Transcription(Base):
 
     hash = Column(String, primary_key=True)
     transcription = Column(Text, nullable=False)
-    timestamp = Column(DateTime, nullable=False, default=datetime.utcnow)
+    timestamp = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
     group_id = Column(Integer, ForeignKey('authorized_groups.group_id'), nullable=True)
     message_id = Column(Integer, ForeignKey('messages.message_id'), nullable=True)  # Link to Message for metadata
 
@@ -149,3 +153,24 @@ class Transcription(Base):
 
     def __repr__(self):
         return f"<Transcription(hash='{self.hash[:8]}...', group_id={self.group_id}, message_id={self.message_id})>"
+
+
+class Birthday(Base):
+    """
+    Stores birthday information for users.
+    Each user can have one birthday entry that can be announced in multiple groups.
+    """
+    __tablename__ = 'birthdays'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    first_name = Column(String, nullable=False)
+    last_name = Column(String, nullable=False, default='')
+    birth_date = Column(String, nullable=False)  # Format: 'MM/dd' or 'yyyy/MM/dd'
+    comment = Column(String, nullable=True)
+    group_ids = Column(JSON, nullable=False, default=list)  # List of group IDs where to announce birthday
+    created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc), 
+                       onupdate=lambda: datetime.now(timezone.utc))
+
+    def __repr__(self):
+        return f"<Birthday(id={self.id}, name='{self.first_name} {self.last_name}', birth_date='{self.birth_date}')>"

@@ -12,6 +12,7 @@ from transcription import Transcriber
 from summarizer import create_summarizer
 from utils import TOKEN, is_admin, TMP_DIR, send_action, split_message
 from datetime import datetime
+from birthday_manager import create_birthday_conversation_handler
 
 # Enable logging
 logConf = logging.basicConfig(
@@ -79,7 +80,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Usa /removegroup per rimuovere un gruppo autorizzato.\n"
         "Usa /removeuser per rimuovere un utente autorizzato.\n"
         "Usa /setlanguage <codice_lingua> per impostare la lingua di trascrizione nel gruppo "
-        "o usalo in chat privata con me per impostare la lingua di trascrizione dei messaggi che mi invierai.\n\n"
+        "o usalo in chat privata con me per impostare la lingua di trascrizione dei messaggi che mi invierai.\n"
+        "Usa /birthday per gestire i compleanni (solo amministratori, in chat privata).\n\n"
         "NOTA: questo bot non tiene in memoria i file audio trascritti, ma memorizza per un periodo limitato (7 giorni)"
         " le trascrizioni, senza legarle a un utente, così da non dover trascrivere nuovamente lo stesso file."
     )
@@ -547,6 +549,9 @@ def main():
     application.add_handler(CommandHandler('adduser', add_user))        #TODO: remove this function - it's not in the purpose of the churchBot
     application.add_handler(CommandHandler('removeuser', remove_user))  #TODO: remove this function - it's not in the purpose of the churchBot
     application.add_handler(CommandHandler('settings', settings))
+    
+    # Birthday management conversation handler
+    application.add_handler(create_birthday_conversation_handler(db))
 
     # Message handlers
     application.add_handler(MessageHandler(filters.VOICE | filters.AUDIO | filters.VIDEO_NOTE, transcribe_audio))

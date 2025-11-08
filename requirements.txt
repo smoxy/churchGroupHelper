@@ -26,3 +26,6 @@ langchain==0.3.27
 langchain-community==0.3.31
 langchain-core==0.3.79
 langchain-ollama==0.3.10
+
+# Telegram Menu Builder for inline keyboards
+telegram-menu-builder==0.1.0

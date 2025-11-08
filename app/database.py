@@ -23,8 +23,8 @@ from sqlalchemy.orm import sessionmaker, scoped_session, Session
 from sqlalchemy.pool import StaticPool
 
 from models import (
-    Base, User, Church, AuthorizedGroup, AuthorizedUser, 
-    Message, Transcription
+    Base, User, Church, AuthorizedGroup, AuthorizedUser,
+    Message, Transcription, Birthday
 )
 
 # Enable logging
@@ -86,8 +86,24 @@ class Database:
             Database instance
         """
         with cls._lock:
+            # Special-case: if caller requests an in-memory SQLite DB, return a
+            # fresh Database instance every time. In-memory SQLite DBs are bound
+            # to the connection and cannot be shared across instances.
+            if db_url == 'sqlite:///:memory:':
+                return cls(db_url)
+
+            # Otherwise, if an instance doesn't exist, or the requested DB URL
+            # differs from the existing instance, create/replace the singleton.
             if cls._instance is None:
                 cls._instance = cls(db_url)
+            else:
+                try:
+                    existing_url = str(cls._instance.engine.url)
+                except Exception:
+                    existing_url = None
+                if db_url and existing_url != db_url:
+                    # Replace the singleton with a new instance for the requested DB
+                    cls._instance = cls(db_url)
         return cls._instance
 
     def _create_tables(self):
@@ -904,6 +920,192 @@ class Database:
                 logger.info(f"Cleaned {count} old transcriptions")
             
             return count
+
+    # ==================== Birthday Operations ====================
+    
+    def add_birthday(
+        self,
+        first_name: str,
+        last_name: str,
+        birth_date: str,
+        group_ids: List[int],
+        comment: str = ''
+    ) -> Birthday:
+        """
+        Add a birthday entry to the database.
+        
+        Args:
+            first_name: Person's first name
+            last_name: Person's last name
+            birth_date: Birth date in format 'MM/dd' or 'yyyy/MM/dd'
+            group_ids: List of group IDs where to announce birthday
+            comment: Optional comment
+            
+        Returns:
+            Created Birthday object
+        """
+        from types import SimpleNamespace
+
+        with self.get_session() as session:
+            birthday = Birthday(
+                first_name=first_name,
+                last_name=last_name,
+                birth_date=birth_date,
+                comment=comment,
+                group_ids=group_ids
+            )
+            session.add(birthday)
+            session.flush()
+            # Copy fields into a simple detached object so callers can access
+            # attributes after the session is closed without causing
+            # DetachedInstanceError.
+            b_obj = SimpleNamespace(
+                id=birthday.id,
+                first_name=birthday.first_name,
+                last_name=birthday.last_name,
+                birth_date=birthday.birth_date,
+                comment=birthday.comment,
+                group_ids=birthday.group_ids,
+            )
+            logger.info(f"Added birthday for {first_name} {last_name} ({birth_date})")
+            return b_obj
+    
+    def get_all_birthdays(self) -> List[Dict[str, Any]]:
+        """
+        Get all birthdays from the database.
+        
+        Returns:
+            List of birthday dictionaries
+        """
+        with self.get_session() as session:
+            birthdays = session.query(Birthday).all()
+            return [
+                {
+                    'id': b.id,
+                    'first_name': b.first_name,
+                    'last_name': b.last_name,
+                    'birth_date': b.birth_date,
+                    'comment': b.comment,
+                    'group_ids': b.group_ids,
+                    'created_at': b.created_at,
+                    'updated_at': b.updated_at
+                }
+                for b in birthdays
+            ]
+    
+    def get_birthdays_by_group(self, group_id: int) -> List[Dict[str, Any]]:
+        """
+        Get all birthdays that should be announced in a specific group.
+        
+        Args:
+            group_id: Telegram group ID
+            
+        Returns:
+            List of birthday dictionaries
+        """
+        with self.get_session() as session:
+            birthdays = session.query(Birthday).all()
+            result = []
+            for b in birthdays:
+                if b.group_ids and group_id in b.group_ids:
+                    result.append({
+                        'id': b.id,
+                        'first_name': b.first_name,
+                        'last_name': b.last_name,
+                        'birth_date': b.birth_date,
+                        'comment': b.comment,
+                        'group_ids': b.group_ids
+                    })
+            return result
+    
+    def update_birthday_groups(self, birthday_id: int, group_ids: List[int]) -> bool:
+        """
+        Update the group IDs for a birthday.
+        
+        Args:
+            birthday_id: Birthday ID
+            group_ids: New list of group IDs
+            
+        Returns:
+            True if successful
+        """
+        with self.get_session() as session:
+            birthday = session.query(Birthday).filter_by(id=birthday_id).first()
+            if birthday:
+                birthday.group_ids = group_ids
+                from sqlalchemy.orm.attributes import flag_modified
+                flag_modified(birthday, 'group_ids')
+                logger.info(f"Updated group IDs for birthday {birthday_id}")
+                return True
+            return False
+    
+    def delete_birthday(self, birthday_id: int) -> bool:
+        """
+        Delete a birthday entry.
+        
+        Args:
+            birthday_id: Birthday ID
+            
+        Returns:
+            True if successful
+        """
+        with self.get_session() as session:
+            birthday = session.query(Birthday).filter_by(id=birthday_id).first()
+            if birthday:
+                session.delete(birthday)
+                logger.info(f"Deleted birthday {birthday_id}")
+                return True
+            return False
+    
+    def get_group_name_by_id(self, group_id: int) -> Optional[str]:
+        """
+        Get the name of a group by its ID.
+        
+        Args:
+            group_id: Telegram group ID
+            
+        Returns:
+            Group name or None if not found
+        """
+        with self.get_session() as session:
+            group = session.query(AuthorizedGroup).filter_by(group_id=group_id).first()
+            return group.group_name if group else None
+    
+    def update_group_name(self, group_id: int, group_name: str) -> bool:
+        """
+        Update the name of a group.
+        
+        Args:
+            group_id: Telegram group ID
+            group_name: New group name
+            
+        Returns:
+            True if successful
+        """
+        with self.get_session() as session:
+            group = session.query(AuthorizedGroup).filter_by(group_id=group_id).first()
+            if group:
+                group.group_name = group_name
+                logger.info(f"Updated name for group {group_id} to {group_name}")
+                return True
+            return False
+    
+    def get_all_groups_info(self) -> List[Dict[str, Any]]:
+        """
+        Get information about all authorized groups.
+        
+        Returns:
+            List of dictionaries with group_id and group_name
+        """
+        with self.get_session() as session:
+            groups = session.query(AuthorizedGroup).all()
+            return [
+                {
+                    'group_id': g.group_id,
+                    'group_name': g.group_name
+                }
+                for g in groups
+            ]
 
     # ==================== Utility Methods ====================
     

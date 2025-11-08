@@ -25,19 +25,31 @@ A comprehensive Telegram bot designed to serve as a multi-tool for church group 
    - Better readability with proper punctuation
    - See [TRANSCRIPTION_IMPROVEMENT.md](manuals/TRANSCRIPTION_IMPROVEMENT.md)
 
+4. **[Birthday Notification System](#-birthday-notifications)** - Automated birthday celebrations with AI-generated messages
+   - Full CRUD interface for birthday management
+   - Automated daily checks with timezone-aware scheduling
+   - AI-generated personalized messages (OpenAI or Ollama)
+   - Smart biblical text selection (age/gender appropriate)
+   - Retry logic for failed sends
+   - Comprehensive admin commands
+   - See [BIRTHDAY_NOTIFICATIONS.md](manuals/BIRTHDAY_NOTIFICATIONS.md) and [AI_PROVIDER_CONFIGURATION.md](manuals/AI_PROVIDER_CONFIGURATION.md)
+
 ### 🚧 In Development
 
-4. **Member Database with Birthday Tracking**
-   - Database schema implemented (User, Church models with birthday fields)
-   - Foundation for church member management ready
-   - Geographic location tracking for churches (latitude, longitude, address)
-   - **Next Steps:**
-     - Implement birthday notification system
-     - Create automated birthday message scheduler
-     - Add group-specific birthday announcement settings
-     - Build permission system for birthday visibility
+5. **Multi-Provider AI Support** - Flexible AI provider selection
+   - Auto-detection: OpenAI (if API key present) or Ollama (default)
+   - Supports all major OpenAI models (GPT-3.5, GPT-4o, etc.)
+   - Supports Ollama cloud and self-hosted
+   - Per-feature model configuration
+   - See [AI_PROVIDER_CONFIGURATION.md](manuals/AI_PROVIDER_CONFIGURATION.md)
 
 ### 📋 Planned Features
+
+6. **Enhanced Member Database**
+   - Permission system for birthday visibility
+   - Member directory with photos
+   - Role and ministry tracking
+   - Attendance tracking
 
 5. **Scheduled Messages** - Send messages to multiple chats simultaneously at scheduled times
    - **Requirements:**
@@ -136,8 +148,15 @@ To run the bot for the first time it needs an .env file with the following varia
 | CONTAINER_NAME | The name that docker will use for the container |
 | BOT_TOKEN      | Telegram bot token taked from BotFather |
 | ADMINS         | IDs separated by a comma to declare which are the bot's admins |
-| OLLAMA_API_KEY | Your Ollama Cloud API key for the summarization and transcription improvement features (get it from https://ollama.com) |
-| TRANSCRIPTION_IMPROVER_MODEL | (Optional) Model to use for transcription improvement. Default: `gpt-oss:20b` |
+| OPENAI_API_KEY | (Optional) Your OpenAI API key - if set, uses OpenAI instead of Ollama |
+| OPENAI_MODEL   | (Optional) OpenAI model to use. Default: `gpt-3.5-turbo`. Options: `gpt-4o-mini`, `gpt-4o`, etc. |
+| OLLAMA_API_KEY | Your Ollama Cloud API key for AI features (get it from https://ollama.com) |
+| OLLAMA_BASE_URL | (Optional) Ollama server URL. Default: `https://ollama.com`. For local: `http://localhost:11434` |
+| OLLAMA_MODEL   | (Optional) Ollama model to use. Default: `gpt-oss:20b` |
+| AI_PROVIDER    | (Optional) Force specific provider: `openai` or `ollama`. Auto-detects if not set. |
+| TRANSCRIPTION_IMPROVER_MODEL | (Optional) Model override for transcription improvement |
+
+**AI Provider Priority**: If `OPENAI_API_KEY` is set, uses OpenAI. Otherwise uses Ollama. See [AI_PROVIDER_CONFIGURATION.md](manuals/AI_PROVIDER_CONFIGURATION.md) for details.
 
 If you are using a Nvidia GPU remember to install the [NVIDIA Container Toolkit](https://github.com/NVIDIA/nvidia-container-toolkit)
 
@@ -145,25 +164,52 @@ If you are using a Nvidia GPU remember to install the [NVIDIA Container Toolkit]
 | Command                      | Description                  |
 | ---------------------------- | ---------------------------- |
 | /setlanguage _<lang>_        | Set the language inside a group or for the direct use. _lang_ has to be in ISO 639-1. |
-| /addgroup                    | Add a particular group to the list of authorized one to use the AI models, since them are resource consuming tasks. This command is valid if sent inside the group, only bot admins can use it. |
+| /addgroup                    | Add a particular group to the list of authorized one to use the AI models. Only bot admins can use it. |
 | /removegroup                 | Remove a particular group from the list of authorized one. |
-| /adduser _<user_id>_ _<first_name>_ | Allow the user to use the transcription in private. You can reply to a message and the bot will take the _user_id_ and the _first_name_ automatically. |
-| /removeuser _<user_id>_     | Remove the user from the list of allowed one, denying the transcription feature. |
-| /setlimits _<n_messages>_ _<days>_  | Set retaining limits of collected messages. The messages that are older will be permanently deleted. |
-| /summarize                   | Reply to any message in the group to summarize the conversation from that message onwards. Includes both text messages and audio transcriptions. Uses LangChain with Ollama Cloud (`gpt-oss:120b`) for intelligent summaries and citations. |
+| /adduser _<user_id>_ _<first_name>_ | Allow the user to use the transcription in private. Reply to a message for auto-fill. |
+| /removeuser _<user_id>_     | Remove the user from the list of allowed one. |
+| /setlimits _<n_messages>_ _<days>_  | Set retaining limits of collected messages. Older messages will be deleted. |
+| /summarize                   | Reply to any message to summarize the conversation from that point. Uses AI (OpenAI or Ollama). |
+| /birthday                    | Add a new birthday to the database (interactive conversation). |
+| /listbirthdays              | List all birthdays with pagination (10 per page). |
+| /editbirthday _<id>_        | Edit birthday details (interactive field selection). |
+| /deletebirthday _<id>_      | Delete a birthday with confirmation. |
+| /linkbirthday _<id>_        | Link a birthday to a Telegram user (forward their message). |
+| /birthdaysettings           | Configure birthday notification settings for the group (admin only). |
+| /importbiblicaltexts        | Import biblical texts from CSV file (admin only). |
+| /previewbirthday _<id>_     | Preview AI-generated birthday message before sending (admin only). |
+| /sendbirthday _<id>_        | Manually send birthday message to groups (admin only). |
+| /birthdaystats              | View birthday message statistics (admin only). |
 
 ---
 
-## �️ Roadmap & Next Steps
+## 🗺️ Roadmap & Next Steps
+
+### ✅ Recently Completed (November 2025)
+
+1. **Birthday Notification System** - Fully implemented!
+   - ✅ Daily birthday check job with timezone awareness
+   - ✅ AI-generated personalized messages (OpenAI/Ollama support)
+   - ✅ Smart biblical text selection (age/gender appropriate)
+   - ✅ Retry logic for failed sends (2-day window)
+   - ✅ Full CRUD interface with pagination
+   - ✅ Admin commands for configuration
+   - ✅ Comprehensive tracking and statistics
+
+2. **Multi-Provider AI Support** - OpenAI + Ollama!
+   - ✅ Auto-detection based on API keys
+   - ✅ Support for all OpenAI models (GPT-3.5, GPT-4o, etc.)
+   - ✅ Support for Ollama cloud and self-hosted
+   - ✅ Unified API via LangChain
+   - ✅ Per-feature model configuration
 
 ### Immediate Priorities (Q1 2026)
 
-1. **Birthday Notification System**
-   - [ ] Implement daily birthday check job
-   - [ ] Create birthday message templates (customizable per group)
-   - [ ] Add birthday announcement scheduling
-   - [ ] Build admin interface for birthday settings
-   - [ ] Add opt-in/opt-out mechanism for users
+1. **Testing & Documentation**
+   - [ ] Unit tests for birthday notification system
+   - [ ] Integration tests for AI providers
+   - [ ] User manual for birthday features
+   - [ ] Admin guide for biblical text management
 
 2. **Message Scheduling Foundation**
    - [ ] Design message queue database schema

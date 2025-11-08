@@ -12,7 +12,6 @@ from transcription import Transcriber
 from summarizer import create_summarizer
 from utils import TOKEN, is_admin, TMP_DIR, send_action, split_message
 from datetime import datetime
-from church_menu import create_church_conversation_handler
 from birthday_manager import create_birthday_conversation_handler
 from birthday_admin_commands import register_birthday_admin_commands
 from birthday_scheduler import setup_birthday_scheduler

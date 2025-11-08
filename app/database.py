@@ -929,7 +929,8 @@ class Database:
         last_name: str,
         birth_date: str,
         group_ids: List[int],
-        comment: str = ''
+        comment: str = '',
+        telegram_user_id: Optional[int] = None
     ) -> Birthday:
         """
         Add a birthday entry to the database.
@@ -940,6 +941,7 @@ class Database:
             birth_date: Birth date in format 'MM/dd' or 'yyyy/MM/dd'
             group_ids: List of group IDs where to announce birthday
             comment: Optional comment
+            telegram_user_id: Optional Telegram user ID for mentions/links
             
         Returns:
             Created Birthday object
@@ -952,7 +954,8 @@ class Database:
                 last_name=last_name,
                 birth_date=birth_date,
                 comment=comment,
-                group_ids=group_ids
+                group_ids=group_ids,
+                telegram_user_id=telegram_user_id
             )
             session.add(birthday)
             session.flush()
@@ -966,6 +969,7 @@ class Database:
                 birth_date=birthday.birth_date,
                 comment=birthday.comment,
                 group_ids=birthday.group_ids,
+                telegram_user_id=birthday.telegram_user_id,
             )
             logger.info(f"Added birthday for {first_name} {last_name} ({birth_date})")
             return b_obj
@@ -987,6 +991,7 @@ class Database:
                     'birth_date': b.birth_date,
                     'comment': b.comment,
                     'group_ids': b.group_ids,
+                    'telegram_user_id': b.telegram_user_id,
                     'created_at': b.created_at,
                     'updated_at': b.updated_at
                 }
@@ -1014,7 +1019,8 @@ class Database:
                         'last_name': b.last_name,
                         'birth_date': b.birth_date,
                         'comment': b.comment,
-                        'group_ids': b.group_ids
+                        'group_ids': b.group_ids,
+                        'telegram_user_id': b.telegram_user_id
                     })
             return result
     
@@ -1056,6 +1062,138 @@ class Database:
                 logger.info(f"Deleted birthday {birthday_id}")
                 return True
             return False
+    
+    def get_birthday_by_id(self, birthday_id: int) -> Optional[Dict[str, Any]]:
+        """
+        Get a specific birthday by its ID.
+        
+        Args:
+            birthday_id: Birthday ID
+            
+        Returns:
+            Birthday dictionary or None if not found
+        """
+        with self.get_session() as session:
+            birthday = session.query(Birthday).filter_by(id=birthday_id).first()
+            if birthday:
+                return {
+                    'id': birthday.id,
+                    'first_name': birthday.first_name,
+                    'last_name': birthday.last_name,
+                    'birth_date': birthday.birth_date,
+                    'comment': birthday.comment,
+                    'group_ids': birthday.group_ids,
+                    'telegram_user_id': birthday.telegram_user_id,
+                    'created_at': birthday.created_at,
+                    'updated_at': birthday.updated_at
+                }
+            return None
+    
+    def update_birthday(
+        self, 
+        birthday_id: int,
+        first_name: Optional[str] = None,
+        last_name: Optional[str] = None,
+        birth_date: Optional[str] = None,
+        comment: Optional[str] = None,
+        group_ids: Optional[List[int]] = None,
+        telegram_user_id: Optional[int] = None
+    ) -> bool:
+        """
+        Update a birthday entry. Only provided fields will be updated.
+        
+        Args:
+            birthday_id: Birthday ID
+            first_name: New first name (optional)
+            last_name: New last name (optional)
+            birth_date: New birth date (optional)
+            comment: New comment (optional)
+            group_ids: New list of group IDs (optional)
+            telegram_user_id: New Telegram user ID (optional)
+            
+        Returns:
+            True if successful
+        """
+        with self.get_session() as session:
+            birthday = session.query(Birthday).filter_by(id=birthday_id).first()
+            if not birthday:
+                return False
+            
+            if first_name is not None:
+                birthday.first_name = first_name
+            if last_name is not None:
+                birthday.last_name = last_name
+            if birth_date is not None:
+                birthday.birth_date = birth_date
+            if comment is not None:
+                birthday.comment = comment
+            if group_ids is not None:
+                birthday.group_ids = group_ids
+                from sqlalchemy.orm.attributes import flag_modified
+                flag_modified(birthday, 'group_ids')
+            if telegram_user_id is not None:
+                birthday.telegram_user_id = telegram_user_id
+            
+            from datetime import timezone
+            birthday.updated_at = datetime.now(timezone.utc)
+            logger.info(f"Updated birthday {birthday_id}")
+            return True
+    
+    def update_birthday_telegram_id(self, birthday_id: int, telegram_user_id: int) -> bool:
+        """
+        Update the Telegram user ID for a birthday entry.
+        
+        Args:
+            birthday_id: Birthday ID
+            telegram_user_id: Telegram user ID
+            
+        Returns:
+            True if successful
+        """
+        return self.update_birthday(birthday_id, telegram_user_id=telegram_user_id)
+    
+    def search_birthdays(
+        self,
+        first_name: Optional[str] = None,
+        last_name: Optional[str] = None,
+        telegram_user_id: Optional[int] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Search for birthdays by name or Telegram user ID.
+        
+        Args:
+            first_name: First name to search (partial match, case-insensitive)
+            last_name: Last name to search (partial match, case-insensitive)
+            telegram_user_id: Telegram user ID to search
+            
+        Returns:
+            List of matching birthday dictionaries
+        """
+        with self.get_session() as session:
+            query = session.query(Birthday)
+            
+            if first_name:
+                query = query.filter(Birthday.first_name.ilike(f'%{first_name}%'))
+            if last_name:
+                query = query.filter(Birthday.last_name.ilike(f'%{last_name}%'))
+            if telegram_user_id:
+                query = query.filter(Birthday.telegram_user_id == telegram_user_id)
+            
+            birthdays = query.all()
+            return [
+                {
+                    'id': b.id,
+                    'first_name': b.first_name,
+                    'last_name': b.last_name,
+                    'birth_date': b.birth_date,
+                    'comment': b.comment,
+                    'group_ids': b.group_ids,
+                    'telegram_user_id': b.telegram_user_id,
+                    'created_at': b.created_at,
+                    'updated_at': b.updated_at
+                }
+                for b in birthdays
+            ]
     
     def get_group_name_by_id(self, group_id: int) -> Optional[str]:
         """

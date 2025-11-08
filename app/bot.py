@@ -80,10 +80,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Usa /removegroup per rimuovere un gruppo autorizzato.\n"
         "Usa /removeuser per rimuovere un utente autorizzato.\n"
         "Usa /setlanguage <codice_lingua> per impostare la lingua di trascrizione nel gruppo "
-        "o usalo in chat privata con me per impostare la lingua di trascrizione dei messaggi che mi invierai.\n"
-        "Usa /birthday per gestire i compleanni (solo amministratori, in chat privata).\n\n"
+        "o usalo in chat privata con me per impostare la lingua di trascrizione dei messaggi che mi invierai.\n\n"
+        "*Gestione Compleanni (solo amministratori):*\n"
+        "• /birthday - Importa compleanni da CSV\n"
+        "• /listbirthdays - Lista tutti i compleanni\n"
+        "• /editbirthday <ID> - Modifica un compleanno\n"
+        "• /deletebirthday <ID> - Elimina un compleanno\n"
+        "• /linkbirthday <ID> - Collega ID Telegram tramite messaggio inoltrato\n\n"
         "NOTA: questo bot non tiene in memoria i file audio trascritti, ma memorizza per un periodo limitato (7 giorni)"
-        " le trascrizioni, senza legarle a un utente, così da non dover trascrivere nuovamente lo stesso file."
+        " le trascrizioni, senza legarle a un utente, così da non dover trascrivere nuovamente lo stesso file.",
+        parse_mode='Markdown'
     )
 
 

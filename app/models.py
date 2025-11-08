@@ -159,6 +159,7 @@ class Birthday(Base):
     """
     Stores birthday information for users.
     Each user can have one birthday entry that can be announced in multiple groups.
+    Can optionally be linked to a Telegram user ID for more advanced features.
     """
     __tablename__ = 'birthdays'
 
@@ -168,9 +169,10 @@ class Birthday(Base):
     birth_date = Column(String, nullable=False)  # Format: 'MM/dd' or 'yyyy/MM/dd'
     comment = Column(String, nullable=True)
     group_ids = Column(JSON, nullable=False, default=list)  # List of group IDs where to announce birthday
+    telegram_user_id = Column(Integer, nullable=True)  # Optional: Telegram user ID for mentions/links
     created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc), 
                        onupdate=lambda: datetime.now(timezone.utc))
 
     def __repr__(self):
-        return f"<Birthday(id={self.id}, name='{self.first_name} {self.last_name}', birth_date='{self.birth_date}')>"
+        return f"<Birthday(id={self.id}, name='{self.first_name} {self.last_name}', birth_date='{self.birth_date}', telegram_user_id={self.telegram_user_id})>"

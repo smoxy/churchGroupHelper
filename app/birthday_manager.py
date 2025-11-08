@@ -6,8 +6,10 @@ Allows admins to:
 1. Select groups where birthdays should be announced
 2. Upload CSV files with birthday data
 3. Import birthdays into the database
+4. CRUD operations: list, edit, delete birthdays
+5. Link birthdays to Telegram users via forwarded messages
 
-Uses telegram-menu-builder for group selection interface.
+Uses native python-telegram-bot InlineKeyboardButton/InlineKeyboardMarkup for menus.
 """
 
 import logging
@@ -507,14 +509,20 @@ class BirthdayManager:
         """
         List all birthdays with pagination.
         
+        Keeps conversation active in STATE_LIST_BIRTHDAYS to allow
+        pagination callbacks to be processed.
+        
         Returns:
-            ConversationHandler.END or STATE_LIST_BIRTHDAYS
+            STATE_LIST_BIRTHDAYS or ConversationHandler.END
         """
         user = update.effective_user
         chat = update.effective_chat
         
+        logger.debug(f"list_birthdays called by user {user.id} in chat {chat.id} (type: {chat.type})")
+        
         # Check if in private chat and user is admin
         if chat.type != 'private' or not is_admin(user.id):
+            logger.warning(f"list_birthdays: access denied for user {user.id} (admin check: {is_admin(user.id)}, chat type: {chat.type})")
             await update.message.reply_text(
                 "⚠️ Questo comando può essere utilizzato solo da amministratori in chat privata."
             )
@@ -522,6 +530,7 @@ class BirthdayManager:
         
         # Get all birthdays
         birthdays = self.db.get_all_birthdays()
+        logger.info(f"list_birthdays: fetched {len(birthdays)} birthdays from database")
         
         if not birthdays:
             await update.message.reply_text("📋 Non ci sono compleanni registrati.")
@@ -529,11 +538,14 @@ class BirthdayManager:
         
         # Initialize page
         page = context.user_data.get(KEY_CURRENT_PAGE, 0)
+        logger.debug(f"list_birthdays: showing page {page}")
         
         # Show paginated list
         await self._show_birthdays_page(update, context, birthdays, page)
         
-        return ConversationHandler.END
+        # Keep conversation active for pagination
+        logger.debug(f"list_birthdays: returning STATE_LIST_BIRTHDAYS to enable pagination")
+        return STATE_LIST_BIRTHDAYS
     
     async def _show_birthdays_page(
         self,
@@ -617,34 +629,46 @@ class BirthdayManager:
         self,
         update: Update,
         context: ContextTypes.DEFAULT_TYPE
-    ) -> None:
+    ) -> int:
         """
         Handle pagination callback for birthday list.
         
         This is called when user clicks on Precedente/Successivo buttons.
+        Keeps conversation in STATE_LIST_BIRTHDAYS for continued navigation.
+        
+        Returns:
+            STATE_LIST_BIRTHDAYS to stay in browsing mode
         """
         query = update.callback_query
+        logger.info(f"handle_page_navigation called with callback_data: {query.data}")
         await query.answer()
         
         # Extract page number from callback_data
         try:
             page = int(query.data.replace("bday_page_", ""))
+            logger.debug(f"Extracted page number: {page}")
         except ValueError:
             logger.error(f"Invalid page callback data: {query.data}")
             await query.edit_message_text("❌ Errore di paginazione.")
-            return
+            return ConversationHandler.END
         
         # Get stored birthday list
         birthdays = context.user_data.get('birthday_list', [])
+        logger.debug(f"Retrieved {len(birthdays) if birthdays else 0} birthdays from context")
         
         if not birthdays:
             logger.warning("Birthday list not found in context, fetching from DB")
             birthdays = self.db.get_all_birthdays()
+            logger.info(f"Fetched {len(birthdays)} birthdays from DB")
         
         logger.debug(f"Page navigation: going to page {page + 1}, total birthdays: {len(birthdays)}")
         
         # Show the requested page
         await self._show_birthdays_page(update, context, birthdays, page)
+        logger.debug("Page navigation completed")
+        
+        # Stay in STATE_LIST_BIRTHDAYS for continued navigation
+        return STATE_LIST_BIRTHDAYS
     
     async def delete_birthday_command(
         self,
@@ -1195,6 +1219,13 @@ def create_birthday_conversation_handler(db: Database) -> ConversationHandler:
                     manager.handle_csv_upload
                 )
             ],
+            STATE_LIST_BIRTHDAYS: [
+                # Handle pagination callbacks while browsing birthday list
+                CallbackQueryHandler(
+                    manager.handle_page_navigation,
+                    pattern='^bday_page_'
+                )
+            ],
             STATE_EDIT_FIELD: [
                 CallbackQueryHandler(
                     manager.handle_edit_field_selection,
@@ -1221,12 +1252,9 @@ def create_birthday_conversation_handler(db: Database) -> ConversationHandler:
             CallbackQueryHandler(
                 manager.handle_delete_confirmation,
                 pattern='^bday_delete_'
-            ),
-            CallbackQueryHandler(
-                manager.handle_page_navigation,
-                pattern='^bday_page_'
             )
         ],
         name='birthday_management',
         persistent=False
+        # per_message=False (default) - Works perfectly with states!
     )

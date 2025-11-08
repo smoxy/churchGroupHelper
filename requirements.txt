@@ -1,7 +1,7 @@
 # Church Group Helper Bot - Python Dependencies
 
 # Core Bot Framework
-python-telegram-bot[job-queue]==21.6
+python-telegram-bot[job-queue]==22.5
 
 # Environment Configuration
 python-dotenv==1.0.1
@@ -28,4 +28,4 @@ langchain-core==0.3.79
 langchain-ollama==0.3.10
 
 # Telegram Menu Builder for inline keyboards
-telegram-menu-builder==0.1.0
+telegram-menu-builder==0.1.1

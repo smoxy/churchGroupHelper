@@ -21,7 +21,6 @@ from telegram.ext import (
     ContextTypes, ConversationHandler, CommandHandler,
     MessageHandler, CallbackQueryHandler, filters
 )
-from telegram_menu_builder import MenuBuilder
 
 from database import Database
 from utils import is_admin
@@ -558,6 +557,10 @@ class BirthdayManager:
         # Ensure page is valid
         page = max(0, min(page, total_pages - 1))
         
+        # Store birthdays list and current page in context for pagination
+        context.user_data['birthday_list'] = birthdays
+        context.user_data[KEY_CURRENT_PAGE] = page
+        
         start_idx = page * items_per_page
         end_idx = start_idx + items_per_page
         page_birthdays = birthdays[start_idx:end_idx]
@@ -595,6 +598,8 @@ class BirthdayManager:
         
         reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
         
+        logger.debug(f"Showing birthdays page {page + 1}/{total_pages}, total birthdays: {len(birthdays)}")
+        
         if update.callback_query:
             await update.callback_query.edit_message_text(
                 message,
@@ -607,6 +612,39 @@ class BirthdayManager:
                 parse_mode='Markdown',
                 reply_markup=reply_markup
             )
+    
+    async def handle_page_navigation(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """
+        Handle pagination callback for birthday list.
+        
+        This is called when user clicks on Precedente/Successivo buttons.
+        """
+        query = update.callback_query
+        await query.answer()
+        
+        # Extract page number from callback_data
+        try:
+            page = int(query.data.replace("bday_page_", ""))
+        except ValueError:
+            logger.error(f"Invalid page callback data: {query.data}")
+            await query.edit_message_text("❌ Errore di paginazione.")
+            return
+        
+        # Get stored birthday list
+        birthdays = context.user_data.get('birthday_list', [])
+        
+        if not birthdays:
+            logger.warning("Birthday list not found in context, fetching from DB")
+            birthdays = self.db.get_all_birthdays()
+        
+        logger.debug(f"Page navigation: going to page {page + 1}, total birthdays: {len(birthdays)}")
+        
+        # Show the requested page
+        await self._show_birthdays_page(update, context, birthdays, page)
     
     async def delete_birthday_command(
         self,
@@ -1183,6 +1221,10 @@ def create_birthday_conversation_handler(db: Database) -> ConversationHandler:
             CallbackQueryHandler(
                 manager.handle_delete_confirmation,
                 pattern='^bday_delete_'
+            ),
+            CallbackQueryHandler(
+                manager.handle_page_navigation,
+                pattern='^bday_page_'
             )
         ],
         name='birthday_management',

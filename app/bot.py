@@ -14,12 +14,14 @@ from utils import TOKEN, is_admin, TMP_DIR, send_action, split_message
 from datetime import datetime
 from birthday_manager import create_birthday_conversation_handler
 
-# Enable logging
+# Enable logging with configurable level
+LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO').upper()
 logConf = logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
+    level=getattr(logging, LOG_LEVEL, logging.INFO)
 )
 logger = logging.getLogger(__name__)
+logger.info(f"Logging level set to: {LOG_LEVEL}")
 
 db = Database.get_instance()
 transcriber = Transcriber()

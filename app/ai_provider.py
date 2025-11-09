@@ -41,8 +41,19 @@ logger = logging.getLogger(__name__)
 
 ProviderType = Literal['openai', 'ollama']
 
-# Cache for models that don't support custom temperature
-_MODELS_NO_CUSTOM_TEMP = set()
+# Models that don't support custom temperature (reasoning models like GPT-5, o3, o4-mini)
+# These use internal reasoning/verification processes that require fixed parameters
+_MODELS_NO_CUSTOM_TEMP_KNOWN = {
+    'gpt-5-mini',      # Reasoning model, only supports temperature=1
+    'gpt-5-nano',      # Reasoning model, only supports temperature=1
+    'gpt-4-mini',      # May have restrictions
+    'o3',              # OpenAI reasoning model
+    'o4',              # OpenAI reasoning model
+    'o4-mini',         # OpenAI reasoning model
+}
+
+# Runtime cache for models we've detected as not supporting custom temperature
+_MODELS_NO_CUSTOM_TEMP_DETECTED = set()
 
 
 class LLMWithFallback(Runnable):
@@ -82,9 +93,9 @@ class LLMWithFallback(Runnable):
             if 'temperature' in error_msg.lower() and 'does not support' in error_msg.lower():
                 logger.warning(
                     f"Model {self._model_name} doesn't support custom temperature. "
-                    f"Retrying with default temperature. Error: {error_msg}"
+                    f"Adding to known list and retrying with default temperature. Error: {error_msg}"
                 )
-                _MODELS_NO_CUSTOM_TEMP.add(self._model_name)
+                _MODELS_NO_CUSTOM_TEMP_DETECTED.add(self._model_name)
                 
                 # Recreate LLM without temperature
                 provider = detect_ai_provider()
@@ -109,9 +120,9 @@ class LLMWithFallback(Runnable):
             if 'temperature' in error_msg.lower() and 'does not support' in error_msg.lower():
                 logger.warning(
                     f"Model {self._model_name} doesn't support custom temperature. "
-                    f"Retrying batch with default temperature."
+                    f"Adding to known list and retrying batch with default temperature."
                 )
-                _MODELS_NO_CUSTOM_TEMP.add(self._model_name)
+                _MODELS_NO_CUSTOM_TEMP_DETECTED.add(self._model_name)
                 
                 provider = detect_ai_provider()
                 new_llm = get_chat_llm(
@@ -173,6 +184,11 @@ def get_chat_llm(
         
     Returns:
         LangChain ChatLLM instance (ChatOpenAI or ChatOllama) with automatic fallback handling
+        
+    Note:
+        Modern reasoning models (gpt-5-mini, gpt-5-nano, o3, o4-mini) don't support
+        custom temperature because they use internal reasoning/verification processes.
+        These models will automatically use temperature=1 (default).
     """
     if provider is None:
         provider = detect_ai_provider()
@@ -185,11 +201,14 @@ def get_chat_llm(
     if provider == 'openai':
         from langchain_openai import ChatOpenAI
         
-        model = model_override or os.getenv('OPENAI_MODEL', 'gpt-5-nano')
+        model = model_override or os.getenv('OPENAI_MODEL', 'gpt-4o-mini')
         
         # Check if this model is known to not support custom temperature
-        if model in _MODELS_NO_CUSTOM_TEMP:
-            logger.info(f"Model {model} previously detected as not supporting custom temperature, using default")
+        if model in _MODELS_NO_CUSTOM_TEMP_KNOWN or model in _MODELS_NO_CUSTOM_TEMP_DETECTED:
+            logger.info(
+                f"Model {model} is a reasoning model and doesn't support custom temperature. "
+                f"Using temperature=1 (default)"
+            )
             use_default_temperature = True
         
         kwargs = {
@@ -203,11 +222,11 @@ def get_chat_llm(
         if max_tokens:
             kwargs['max_tokens'] = max_tokens
         
-        temp_info = "default" if use_default_temperature else str(temperature)
+        temp_info = "default (reasoning model)" if use_default_temperature else str(temperature)
         logger.info(f"Initializing ChatOpenAI with model: {model}, temperature: {temp_info}")
         llm = ChatOpenAI(**kwargs)
         
-        # Wrap with fallback handler
+        # Wrap with fallback handler (for unexpected errors)
         return LLMWithFallback(llm, model)
     
     else:  # ollama

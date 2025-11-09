@@ -149,7 +149,7 @@ To run the bot for the first time it needs an .env file with the following varia
 | BOT_TOKEN      | Telegram bot token taked from BotFather |
 | ADMINS         | IDs separated by a comma to declare which are the bot's admins |
 | OPENAI_API_KEY | (Optional) Your OpenAI API key - if set, uses OpenAI instead of Ollama |
-| OPENAI_MODEL   | (Optional) OpenAI model to use. Default: `gpt-3.5-turbo`. Options: `gpt-4o-mini`, `gpt-4o`, etc. |
+| OPENAI_MODEL   | (Optional) OpenAI model to use. Default: `gpt-5-nano`. Options: `gpt-4o-mini`, `gpt-4o`, etc. |
 | OLLAMA_API_KEY | Your Ollama Cloud API key for AI features (get it from https://ollama.com) |
 | OLLAMA_BASE_URL | (Optional) Ollama server URL. Default: `https://ollama.com`. For local: `http://localhost:11434` |
 | OLLAMA_MODEL   | (Optional) Ollama model to use. Default: `gpt-oss:20b` |

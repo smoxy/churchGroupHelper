@@ -18,7 +18,7 @@ Features:
 
 Environment Variables (managed by ai_provider module):
 - OPENAI_API_KEY: If set, uses OpenAI
-- OPENAI_MODEL: Model name (default: gpt-3.5-turbo)
+- OPENAI_MODEL: Model name (default: gpt-5-nano)
 - OLLAMA_BASE_URL: Ollama server URL (default: https://ollama.com)
 - OLLAMA_MODEL: Ollama model name (default: gpt-oss:20b)
 - AI_PROVIDER: Override provider ('openai' or 'ollama')

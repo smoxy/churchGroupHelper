@@ -1635,6 +1635,7 @@ class Database:
     ) -> Optional[Dict[str, Any]]:
         """
         Get existing birthday message record for idempotency check.
+        Prioritizes 'sent' messages over 'failed' ones.
         
         Args:
             birthday_id: ID of the birthday
@@ -1645,11 +1646,21 @@ class Database:
             Dictionary with birthday message data or None if not found
         """
         with self.get_session() as session:
+            # First try to find a successfully sent message
             msg = session.query(BirthdayMessage).filter_by(
                 birthday_id=birthday_id,
                 group_id=group_id,
-                birthday_year=birthday_year
+                birthday_year=birthday_year,
+                status='sent'
             ).first()
+            
+            # If no sent message, return any message (likely failed)
+            if not msg:
+                msg = session.query(BirthdayMessage).filter_by(
+                    birthday_id=birthday_id,
+                    group_id=group_id,
+                    birthday_year=birthday_year
+                ).first()
             
             if not msg:
                 return None

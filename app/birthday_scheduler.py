@@ -137,6 +137,76 @@ class BirthdayScheduler:
         except Exception as e:
             logger.error(f"[BIRTHDAY_SCHEDULER] Error in _notify_admins_about_missing_config: {e}", exc_info=True)
     
+    def _generate_fallback_message(
+        self,
+        birthday: Dict[str, Any],
+        use_ai: bool = True
+    ) -> Optional[str]:
+        """
+        Generate a fallback birthday message when no biblical text is available.
+        Uses AI if enabled to create an organic message that incorporates the comment field.
+        
+        Args:
+            birthday: Birthday dictionary with person's info
+            use_ai: Whether to use AI for generation
+            
+        Returns:
+            Generated message string or None if failed
+        """
+        name = f"{birthday['first_name']} {birthday['last_name']}"
+        comment = birthday.get('comment', '')
+        
+        if not use_ai:
+            # Simple template fallback
+            comment_part = f"\n\n💡 {comment}" if comment else ""
+            message = f"🎉 Buon compleanno {name}! 🎂\n\n"
+            message += f"Oggi festeggiamo il compleanno di {name}!\n"
+            message += f"Ricordiamoci di fargli/farle gli auguri! 🎈{comment_part}"
+            return message
+        
+        try:
+            from langchain_core.prompts import ChatPromptTemplate
+            from langchain_core.messages import SystemMessage, HumanMessage
+            
+            # Create prompt for fallback message
+            system_message = SystemMessage(content="""Sei un assistente che genera messaggi di promemoria per compleanni in una comunità cristiana.
+
+Il tuo compito è creare un breve messaggio di promemoria caloroso che:
+- Ricorda al gruppo di fare gli auguri alla persona
+- Se presente una nota/commento, usala in modo ORGANICO per spiegare come raggiungere la persona con gli auguri
+- Il commento spesso indica relazioni familiari o come contattare la persona (es. "nipote di Giovanni" o "tramite sua sorella Maria")
+- NON fare note tecniche agli amministratori
+- Mantieni un tono caloroso e positivo
+- Massimo 150 parole
+- In italiano""")
+            
+            human_content = f"""Genera un messaggio di promemoria per il compleanno di:
+Nome: {name}"""
+            
+            if comment:
+                human_content += f"\nNota importante da incorporare organicamente: {comment}"
+                human_content += "\n\n(Usa questa nota per spiegare come il gruppo può fare gli auguri a questa persona, rendendolo naturale nel messaggio)"
+            
+            human_content += "\n\nMessaggio:"
+            
+            messages = [system_message, HumanMessage(content=human_content)]
+            
+            # Use the message generator's LLM
+            response = self.message_generator.llm.invoke(messages)
+            message = response.content.strip()
+            
+            # Validate message
+            if message and 50 < len(message) < 1000:
+                logger.info(f"[BIRTHDAY_SCHEDULER] Generated AI fallback message ({len(message)} chars)")
+                return message
+            else:
+                logger.warning(f"[BIRTHDAY_SCHEDULER] AI fallback message validation failed (length: {len(message)})")
+                return None
+                
+        except Exception as e:
+            logger.error(f"[BIRTHDAY_SCHEDULER] Error generating AI fallback message: {e}", exc_info=True)
+            return None
+    
     def _parse_birth_date(self, birth_date: str) -> tuple[int, int]:
         """
         Parse birth_date string to get month and day.
@@ -378,14 +448,23 @@ class BirthdayScheduler:
                 logger.warning(f"[BIRTHDAY_SCHEDULER] ⚠️  CONFIGURATION WARNING: Group {group_id} has no biblical texts!")
                 logger.warning(f"[BIRTHDAY_SCHEDULER] ⚠️  Sending simplified birthday reminder instead.")
                 
-                # Create simple message without biblical text
+                # Generate fallback message using AI if available
                 name = f"{birthday['first_name']} {birthday['last_name']}"
-                comment_info = f"\n\n💡 Nota: {birthday['comment']}" if birthday.get('comment') else ""
+                use_ai = settings.get('birthday_ai_enabled', 1) == 1
                 
-                message = f"🎉 Buon compleanno {name}! 🎂\n\n"
-                message += f"Oggi festeggiamo il compleanno di {name}!\n"
-                message += f"Ricordiamoci di fargli/farle gli auguri! 🎈{comment_info}\n\n"
-                message += f"⚠️ Nota per gli amministratori: Importare testi biblici per messaggi più completi."
+                logger.debug(f"[BIRTHDAY_SCHEDULER] Generating fallback message (AI enabled: {use_ai})")
+                message = self._generate_fallback_message(
+                    birthday=birthday,
+                    use_ai=use_ai
+                )
+                
+                if not message:
+                    # Ultimate fallback if generation fails
+                    logger.warning(f"[BIRTHDAY_SCHEDULER] Failed to generate fallback message, using basic template")
+                    comment_info = f"\n\n💡 {birthday['comment']}" if birthday.get('comment') else ""
+                    message = f"🎉 Buon compleanno {name}! 🎂\n\n"
+                    message += f"Oggi festeggiamo il compleanno di {name}!\n"
+                    message += f"Ricordiamoci di fargli/farle gli auguri! 🎈{comment_info}"
                 
                 # Create database record
                 msg_id = self.db.create_birthday_message(
@@ -569,6 +648,19 @@ class BirthdayScheduler:
         for msg in failed_messages:
             logger.info(f"[BIRTHDAY_SCHEDULER] Retrying message {msg['id']} (attempt {msg['retry_count'] + 1}/3)")
             logger.debug(f"[BIRTHDAY_SCHEDULER] Failed message details: birthday_id={msg['birthday_id']}, group_id={msg['group_id']}, error='{msg.get('error_message', 'unknown')}'")
+            
+            # Check if message was already sent successfully this year (idempotency check)
+            # This can happen if the message was sent by another process or manual intervention
+            existing_msg = self.db.get_birthday_message(
+                birthday_id=msg['birthday_id'],
+                group_id=msg['group_id'],
+                birthday_year=msg['birthday_year']
+            )
+            
+            if existing_msg and existing_msg['status'] == 'sent' and existing_msg['id'] != msg['id']:
+                logger.info(f"[BIRTHDAY_SCHEDULER] Birthday {msg['birthday_id']} already sent successfully this year (by message {existing_msg['id']}), skipping retry of message {msg['id']}")
+                results['still_failed'] += 1  # Count as still failed, but won't retry
+                continue
             
             # Don't skip configuration errors anymore - we now send fallback messages
             # So all errors are worth retrying

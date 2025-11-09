@@ -52,8 +52,6 @@ class ConversationSummarizer:
         else:
             model_override = 'gpt-oss:120b'  # Larger Ollama model for better summaries
         
-        # Note: get_chat_llm now includes automatic fallback for temperature errors
-        # If gpt-5-mini doesn't support custom temperature, it will retry with default
         self._llm = get_chat_llm(
             provider=provider,
             temperature=0.3,  # Lower temperature for more focused summaries

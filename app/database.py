@@ -1703,6 +1703,34 @@ class Database:
                 }
                 for msg in messages
             ]
+    
+    def increment_birthday_message_retry(self, message_id: int) -> bool:
+        """
+        Increment the retry count for a birthday message.
+        
+        Args:
+            message_id: ID of the birthday message record
+            
+        Returns:
+            True if updated successfully, False otherwise
+        """
+        with self.get_session() as session:
+            try:
+                birthday_msg = session.query(BirthdayMessage).filter_by(id=message_id).first()
+                if not birthday_msg:
+                    logger.warning(f"Birthday message {message_id} not found")
+                    return False
+                
+                birthday_msg.retry_count += 1
+                birthday_msg.updated_at = datetime.now()
+                
+                session.commit()
+                logger.debug(f"Incremented retry count for birthday message {message_id} to {birthday_msg.retry_count}")
+                return True
+            except Exception as e:
+                session.rollback()
+                logger.error(f"Error incrementing retry count for message {message_id}: {e}")
+                return False
 
     def get_birthday_messages_stats(
         self,

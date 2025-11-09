@@ -80,6 +80,8 @@ Devi integrare tutti i testi biblici nel messaggio in modo armonioso.""")
 
 {people_info}
 
+{comments_info}
+
 Testi biblici da integrare nel messaggio:
 {biblical_texts}
 
@@ -88,6 +90,7 @@ Ricorda:
 - Ogni persona deve avere il SUO testo biblico dedicato
 - Integra i testi in modo naturale nel messaggio
 - Usa un tono appropriato per l'età e il genere
+- Se ci sono note/commenti, usali per personalizzare il messaggio (es. menzionare familiari presenti)
 - Mantieni il messaggio conciso ma significativo
 
 Messaggio:"""
@@ -122,6 +125,30 @@ Messaggio:"""
             lines.append(f"- {b['first_name']} {b['last_name']}{age_info}{gender_info}")
         
         return "\n".join(lines)
+    
+    def _format_comments_info(
+        self,
+        birthdays: List[Dict[str, Any]]
+    ) -> str:
+        """
+        Format comment information for the prompt.
+        
+        Args:
+            birthdays: List of birthday dictionaries
+            
+        Returns:
+            Formatted string with comments or empty string
+        """
+        comments = []
+        for b in birthdays:
+            if b.get('comment'):
+                name = f"{b['first_name']} {b['last_name']}"
+                comments.append(f"- {name}: {b['comment']}")
+        
+        if not comments:
+            return ""
+        
+        return "Note aggiuntive (usa queste informazioni per personalizzare il messaggio):\n" + "\n".join(comments)
     
     def _format_biblical_texts(
         self,
@@ -186,12 +213,14 @@ Messaggio:"""
             
             # Format input data
             people_info = self._format_people_info(birthdays)
+            comments_info = self._format_comments_info(birthdays)
             biblical_texts_info = self._format_biblical_texts(biblical_texts, birthdays)
             
             # Generate message using AI
             chain = prompt | self.llm
             response = chain.invoke({
                 "people_info": people_info,
+                "comments_info": comments_info,
                 "biblical_texts": biblical_texts_info
             })
             

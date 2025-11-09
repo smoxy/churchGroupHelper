@@ -558,6 +558,25 @@ def main():
     
     # Setup birthday scheduler (daily checks)
     setup_birthday_scheduler(application, db)
+    
+    # Retry failed birthday messages at startup
+    async def startup_retry_failed_messages(application):
+        """Retry failed birthday messages on bot startup"""
+        logger.info("[BIRTHDAY_SCHEDULER] Bot startup: checking for failed messages to retry")
+        from birthday_scheduler import BirthdayScheduler
+        scheduler = BirthdayScheduler(db, application.bot)
+        try:
+            result = await scheduler.retry_failed_messages()
+            logger.info(f"[BIRTHDAY_SCHEDULER] Startup retry completed: {result}")
+            if result['succeeded'] > 0:
+                logger.info(f"[BIRTHDAY_SCHEDULER] ✅ Successfully sent {result['succeeded']} failed messages on startup!")
+            if result['still_failed'] > 0:
+                logger.warning(f"[BIRTHDAY_SCHEDULER] ⚠️  Still {result['still_failed']} failed messages remaining")
+        except Exception as e:
+            logger.error(f"[BIRTHDAY_SCHEDULER] Error during startup retry: {str(e)}", exc_info=True)
+    
+    # Schedule the startup retry (run after bot is fully initialized)
+    application.job_queue.run_once(startup_retry_failed_messages, when=5)  # 5 seconds after startup
 
     # Message handlers
     application.add_handler(MessageHandler(filters.VOICE | filters.AUDIO | filters.VIDEO_NOTE, transcribe_audio))

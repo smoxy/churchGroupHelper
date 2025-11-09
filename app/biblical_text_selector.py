@@ -255,6 +255,9 @@ class BiblicalTextSelector:
         
         # No texts available at all
         logger.error(f"No biblical texts available for group {group_id}")
+        logger.error(f"CRITICAL: Group {group_id} has no biblical texts configured!")
+        logger.error(f"ACTION REQUIRED: Import biblical texts for this group using the admin interface.")
+        logger.error(f"Birthday messages cannot be sent without biblical texts.")
         return None
     
     def mark_text_used(self, text_id: int) -> bool:

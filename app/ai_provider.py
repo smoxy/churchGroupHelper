@@ -35,6 +35,8 @@ import os
 from typing import Literal, Optional
 from functools import wraps
 
+from langchain_core.runnables import Runnable
+
 logger = logging.getLogger(__name__)
 
 ProviderType = Literal['openai', 'ollama']
@@ -43,7 +45,7 @@ ProviderType = Literal['openai', 'ollama']
 _MODELS_NO_CUSTOM_TEMP = set()
 
 
-class LLMWithFallback:
+class LLMWithFallback(Runnable):
     """
     Wrapper for LangChain LLM that handles temperature-related errors with fallback.
     
@@ -59,6 +61,16 @@ class LLMWithFallback:
         """
         self._llm = llm
         self._model_name = model_name
+    
+    @property
+    def InputType(self):
+        """Input type delegation to wrapped LLM."""
+        return self._llm.InputType
+    
+    @property
+    def OutputType(self):
+        """Output type delegation to wrapped LLM."""
+        return self._llm.OutputType
     
     def invoke(self, input, config=None):
         """Invoke with fallback for temperature errors."""

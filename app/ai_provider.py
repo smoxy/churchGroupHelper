@@ -43,6 +43,82 @@ ProviderType = Literal['openai', 'ollama']
 _MODELS_NO_CUSTOM_TEMP = set()
 
 
+class LLMWithFallback:
+    """
+    Wrapper for LangChain LLM that handles temperature-related errors with fallback.
+    
+    Some models (like gpt-5-mini, gpt-5-nano) don't support custom temperature values.
+    This wrapper detects such errors and automatically retries without temperature.
+    """
+    
+    def __init__(self, llm, model_name: str):
+        """
+        Args:
+            llm: The wrapped LangChain LLM instance
+            model_name: Name of the model (for logging and caching)
+        """
+        self._llm = llm
+        self._model_name = model_name
+    
+    def invoke(self, input, config=None):
+        """Invoke with fallback for temperature errors."""
+        try:
+            return self._llm.invoke(input, config)
+        except Exception as e:
+            error_msg = str(e)
+            # Check if it's a temperature-related error
+            if 'temperature' in error_msg.lower() and 'does not support' in error_msg.lower():
+                logger.warning(
+                    f"Model {self._model_name} doesn't support custom temperature. "
+                    f"Retrying with default temperature. Error: {error_msg}"
+                )
+                _MODELS_NO_CUSTOM_TEMP.add(self._model_name)
+                
+                # Recreate LLM without temperature
+                provider = detect_ai_provider()
+                new_llm = get_chat_llm(
+                    provider=provider,
+                    model_override=self._model_name,
+                    use_default_temperature=True
+                )
+                # Unwrap if it's also a LLMWithFallback
+                if isinstance(new_llm, LLMWithFallback):
+                    return new_llm._llm.invoke(input, config)
+                return new_llm.invoke(input, config)
+            else:
+                raise
+    
+    def batch(self, inputs, config=None, **kwargs):
+        """Batch invoke with fallback for temperature errors."""
+        try:
+            return self._llm.batch(inputs, config, **kwargs)
+        except Exception as e:
+            error_msg = str(e)
+            if 'temperature' in error_msg.lower() and 'does not support' in error_msg.lower():
+                logger.warning(
+                    f"Model {self._model_name} doesn't support custom temperature. "
+                    f"Retrying batch with default temperature."
+                )
+                _MODELS_NO_CUSTOM_TEMP.add(self._model_name)
+                
+                provider = detect_ai_provider()
+                new_llm = get_chat_llm(
+                    provider=provider,
+                    model_override=self._model_name,
+                    use_default_temperature=True
+                )
+                # Unwrap if it's also a LLMWithFallback
+                if isinstance(new_llm, LLMWithFallback):
+                    return new_llm._llm.batch(inputs, config, **kwargs)
+                return new_llm.batch(inputs, config, **kwargs)
+            else:
+                raise
+    
+    def __getattr__(self, name):
+        """Delegate all other attributes to the wrapped LLM."""
+        return getattr(self._llm, name)
+
+
 def detect_ai_provider() -> ProviderType:
     """
     Detect which AI provider to use based on environment variables.
@@ -120,7 +196,7 @@ def get_chat_llm(
         llm = ChatOpenAI(**kwargs)
         
         # Wrap with fallback handler
-        return wrap_llm_with_fallback(llm, model)
+        return LLMWithFallback(llm, model)
     
     else:  # ollama
         from langchain_ollama import ChatOllama
@@ -149,75 +225,7 @@ def get_chat_llm(
         llm = ChatOllama(**kwargs)
         
         # Wrap with fallback handler
-        return wrap_llm_with_fallback(llm, model)
-
-
-def wrap_llm_with_fallback(llm, model_name: str):
-    """
-    Wrap an LLM with fallback handling for temperature-related errors.
-    
-    Some models (like gpt-5-mini, gpt-5-nano) don't support custom temperature values.
-    This wrapper detects such errors and automatically retries without temperature.
-    
-    Args:
-        llm: The LangChain LLM instance to wrap
-        model_name: Name of the model (for logging and caching)
-        
-    Returns:
-        Wrapped LLM with fallback behavior
-    """
-    original_invoke = llm.invoke
-    original_batch = llm.batch
-    
-    def invoke_with_fallback(input, config=None):
-        try:
-            return original_invoke(input, config)
-        except Exception as e:
-            error_msg = str(e)
-            # Check if it's a temperature-related error
-            if 'temperature' in error_msg.lower() and 'does not support' in error_msg.lower():
-                logger.warning(
-                    f"Model {model_name} doesn't support custom temperature. "
-                    f"Retrying with default temperature. Error: {error_msg}"
-                )
-                _MODELS_NO_CUSTOM_TEMP.add(model_name)
-                
-                # Recreate LLM without temperature
-                provider = detect_ai_provider()
-                new_llm = get_chat_llm(
-                    provider=provider,
-                    model_override=model_name,
-                    use_default_temperature=True
-                )
-                return new_llm.invoke(input, config)
-            else:
-                raise
-    
-    def batch_with_fallback(inputs, config=None, **kwargs):
-        try:
-            return original_batch(inputs, config, **kwargs)
-        except Exception as e:
-            error_msg = str(e)
-            if 'temperature' in error_msg.lower() and 'does not support' in error_msg.lower():
-                logger.warning(
-                    f"Model {model_name} doesn't support custom temperature. "
-                    f"Retrying batch with default temperature."
-                )
-                _MODELS_NO_CUSTOM_TEMP.add(model_name)
-                
-                provider = detect_ai_provider()
-                new_llm = get_chat_llm(
-                    provider=provider,
-                    model_override=model_name,
-                    use_default_temperature=True
-                )
-                return new_llm.batch(inputs, config, **kwargs)
-            else:
-                raise
-    
-    llm.invoke = invoke_with_fallback
-    llm.batch = batch_with_fallback
-    return llm
+        return LLMWithFallback(llm, model)
 
 
 def get_provider_info() -> dict:

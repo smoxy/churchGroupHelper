@@ -1775,12 +1775,31 @@ class Database:
             failed = len([m for m in messages if m.status == 'failed'])
             pending = len([m for m in messages if m.status == 'pending'])
             
+            # Calculate retry count
+            total_retries = sum(m.retry_count for m in messages)
+            
+            # Get recent errors
+            failed_messages = [m for m in messages if m.status == 'failed']
+            failed_messages.sort(key=lambda x: x.created_at, reverse=True)
+            recent_errors = [
+                {
+                    'error_message': m.error_message,
+                    'created_at': m.created_at.strftime('%Y-%m-%d %H:%M')
+                }
+                for m in failed_messages[:5]
+            ]
+            
             return {
                 'total': total,
                 'sent': sent,
                 'failed': failed,
                 'pending': pending,
-                'success_rate': (sent / total * 100) if total > 0 else 0,
+                'sent_percentage': (sent / total * 100) if total > 0 else 0,
+                'failed_percentage': (failed / total * 100) if total > 0 else 0,
+                'retries': total_retries,
+                'recent_errors': recent_errors,
+                'date_from': cutoff_date.strftime('%Y-%m-%d'),
+                'date_to': datetime.now().strftime('%Y-%m-%d'),
                 'days': days
             }
 

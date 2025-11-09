@@ -15,6 +15,8 @@ from datetime import datetime
 from birthday_manager import create_birthday_conversation_handler
 from birthday_admin_commands import register_birthday_admin_commands
 from birthday_scheduler import setup_birthday_scheduler
+from birthday_stats_commands import register_birthday_stats_commands
+from birthday_simulate_command import create_simulate_conversation_handler
 
 # Enable logging with configurable level
 LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO').upper()
@@ -555,6 +557,12 @@ def main():
     
     # Birthday admin commands (settings, preview, stats, import)
     register_birthday_admin_commands(application, db)
+    
+    # Birthday statistics commands (upcoming, stats)
+    register_birthday_stats_commands(application, db)
+    
+    # Birthday simulation conversation handler
+    application.add_handler(create_simulate_conversation_handler(db))
     
     # Setup birthday scheduler (daily checks)
     setup_birthday_scheduler(application, db)

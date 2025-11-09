@@ -1080,19 +1080,20 @@ class BirthdayManager:
         context: ContextTypes.DEFAULT_TYPE
     ) -> int:
         """
-        Link a birthday to a Telegram user by forwarding a message.
-        Usage: /linkbirthday <ID>
+        Link a birthday to a Telegram user by forwarding or replying to a message.
+        Usage: /linkbirthday <ID> [reply to user message or forward]
+        Can be used in groups or private chat.
         
         Returns:
-            STATE_LINK_FORWARD
+            STATE_LINK_FORWARD or ConversationHandler.END
         """
         user = update.effective_user
         chat = update.effective_chat
         
-        # Check if in private chat and user is admin
-        if chat.type != 'private' or not is_admin(user.id):
+        # Check if user is admin
+        if not is_admin(user.id):
             await update.message.reply_text(
-                "⚠️ Questo comando può essere utilizzato solo da amministratori in chat privata."
+                "⚠️ Questo comando può essere utilizzato solo da amministratori."
             )
             return ConversationHandler.END
         
@@ -1100,7 +1101,10 @@ class BirthdayManager:
         if not context.args or len(context.args) != 1:
             await update.message.reply_text(
                 "❌ Utilizzo: /linkbirthday <ID>\n"
-                "Usa /listbirthdays per vedere gli ID disponibili."
+                "Usa /listbirthdays per vedere gli ID disponibili.\n\n"
+                "💡 Puoi usare questo comando:\n"
+                "• In privato: inoltrando un messaggio dell'utente\n"
+                "• In gruppo: rispondendo a un messaggio dell'utente"
             )
             return ConversationHandler.END
         
@@ -1117,20 +1121,109 @@ class BirthdayManager:
             await update.message.reply_text(f"❌ Compleanno con ID {birthday_id} non trovato.")
             return ConversationHandler.END
         
-        # Store birthday ID
+        # Store birthday ID and admin ID
         context.user_data[KEY_SELECTED_BIRTHDAY_ID] = birthday_id
+        context.user_data['link_admin_id'] = user.id
+        context.user_data['link_in_group'] = chat.type in ['group', 'supergroup']
         
         full_name = f"{birthday['first_name']} {birthday['last_name']}".strip()
         
-        await update.message.reply_text(
-            f"🔗 *Collega Telegram ID*\n\n"
-            f"Compleanno: *{full_name}* ({birthday['birth_date']})\n\n"
-            f"Inoltra un messaggio dell'utente che vuoi collegare a questo compleanno.\n\n"
-            f"Usa /cancel per annullare.",
-            parse_mode='Markdown'
-        )
+        # Check if this is a reply to a message in a group
+        if update.message.reply_to_message and chat.type in ['group', 'supergroup']:
+            # Direct linking from reply in group
+            return await self._handle_group_reply_link(update, context, birthday, full_name)
+        
+        # Otherwise, enter conversation mode for forwarding
+        if chat.type in ['group', 'supergroup']:
+            await update.message.reply_text(
+                f"🔗 *Collega Telegram ID*\n\n"
+                f"Compleanno: *{full_name}* ({birthday['birth_date']})\n\n"
+                f"💡 Rispondi con /linkbirthday {birthday_id} al messaggio dell'utente da collegare.",
+                parse_mode='Markdown'
+            )
+        else:
+            await update.message.reply_text(
+                f"🔗 *Collega Telegram ID*\n\n"
+                f"Compleanno: *{full_name}* ({birthday['birth_date']})\n\n"
+                f"Inoltra un messaggio dell'utente che vuoi collegare a questo compleanno.\n\n"
+                f"Usa /cancel per annullare.",
+                parse_mode='Markdown'
+            )
         
         return STATE_LINK_FORWARD
+    
+    async def _handle_group_reply_link(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE,
+        birthday: Dict,
+        full_name: str
+    ) -> int:
+        """
+        Handle linking via reply in a group.
+        Deletes the command message and sends private notification to admin.
+        
+        Returns:
+            ConversationHandler.END
+        """
+        replied_user = update.message.reply_to_message.from_user
+        telegram_user_id = replied_user.id
+        telegram_user_name = replied_user.first_name
+        telegram_user_username = replied_user.username
+        admin_id = context.user_data['link_admin_id']
+        birthday_id = context.user_data[KEY_SELECTED_BIRTHDAY_ID]
+        
+        # Attempt to link
+        success = self.db.update_birthday_telegram_id(birthday_id, telegram_user_id)
+        
+        # Delete the command message from the group (to keep chat clean)
+        try:
+            await update.message.delete()
+            logger.info(f"Deleted linkbirthday command message in group {update.effective_chat.id}")
+        except Exception as e:
+            logger.warning(f"Could not delete command message: {e}")
+        
+        # Send private notification to admin
+        try:
+            if success:
+                # Create mention link
+                if telegram_user_username:
+                    user_link = f"@{telegram_user_username}"
+                else:
+                    user_link = f"[{telegram_user_name}](tg://user?id={telegram_user_id})"
+                
+                notification = (
+                    f"✅ *Collegamento Riuscito!*\n\n"
+                    f"📋 Compleanno DB: *{full_name}*\n"
+                    f"👤 Utente Telegram: {user_link}\n"
+                    f"🆔 Telegram ID: `{telegram_user_id}`\n\n"
+                    f"Il collegamento è stato salvato con successo."
+                )
+            else:
+                notification = (
+                    f"❌ *Collegamento Fallito*\n\n"
+                    f"📋 Compleanno DB: *{full_name}*\n"
+                    f"👤 Utente Telegram: {telegram_user_name}\n"
+                    f"🆔 Telegram ID: `{telegram_user_id}`\n\n"
+                    f"Si è verificato un errore durante il salvataggio."
+                )
+            
+            await context.bot.send_message(
+                chat_id=admin_id,
+                text=notification,
+                parse_mode='Markdown'
+            )
+            logger.info(f"Sent link notification to admin {admin_id}")
+        
+        except Exception as e:
+            logger.error(f"Could not send private notification to admin {admin_id}: {e}")
+        
+        # Clean up
+        context.user_data.pop(KEY_SELECTED_BIRTHDAY_ID, None)
+        context.user_data.pop('link_admin_id', None)
+        context.user_data.pop('link_in_group', None)
+        
+        return ConversationHandler.END
     
     async def handle_link_forward(
         self,
@@ -1138,41 +1231,61 @@ class BirthdayManager:
         context: ContextTypes.DEFAULT_TYPE
     ) -> int:
         """
-        Handle forwarded message to link Telegram user ID.
+        Handle forwarded message or replied message to link Telegram user ID.
+        Works in both private chat (forward) and groups (reply).
         
         Returns:
-            ConversationHandler.END
+            ConversationHandler.END or STATE_LINK_FORWARD
         """
         birthday_id = context.user_data.get(KEY_SELECTED_BIRTHDAY_ID)
+        admin_id = context.user_data.get('link_admin_id')
+        in_group = context.user_data.get('link_in_group', False)
         
         if not birthday_id:
             await update.message.reply_text("❌ Errore: dati di sessione mancanti.")
             return ConversationHandler.END
         
-        # Check if message is forwarded
+        # Get birthday info
+        birthday = self.db.get_birthday_by_id(birthday_id)
+        if not birthday:
+            await update.message.reply_text("❌ Errore: compleanno non trovato.")
+            return ConversationHandler.END
+        
+        full_name = f"{birthday['first_name']} {birthday['last_name']}".strip()
+        
+        # Check if this is a reply in a group
+        if update.message.reply_to_message and update.effective_chat.type in ['group', 'supergroup']:
+            return await self._handle_group_reply_link(update, context, birthday, full_name)
+        
+        # Check if message is forwarded (for private chat)
         if not update.message.forward_from and not update.message.forward_sender_name:
             await update.message.reply_text(
-                "⚠️ Devi inoltrare un messaggio dell'utente.\n"
+                "⚠️ Devi inoltrare un messaggio dell'utente (in privato) o rispondere a un messaggio (in gruppo).\n"
                 "Usa /cancel per annullare."
             )
             return STATE_LINK_FORWARD
         
-        # Get user ID from forwarded message
+        # Get user ID from forwarded message (private chat mode)
         if update.message.forward_from:
             telegram_user_id = update.message.forward_from.id
-            user_name = update.message.forward_from.first_name
+            telegram_user_name = update.message.forward_from.first_name
+            telegram_user_username = update.message.forward_from.username
             
             # Update birthday
             success = self.db.update_birthday_telegram_id(birthday_id, telegram_user_id)
             
             if success:
-                birthday = self.db.get_birthday_by_id(birthday_id)
-                full_name = f"{birthday['first_name']} {birthday['last_name']}".strip()
+                # Create mention link
+                if telegram_user_username:
+                    user_link = f"@{telegram_user_username}"
+                else:
+                    user_link = f"[{telegram_user_name}](tg://user?id={telegram_user_id})"
                 
                 await update.message.reply_text(
                     f"✅ *Collegamento riuscito!*\n\n"
-                    f"Compleanno di *{full_name}* collegato a:\n"
-                    f"👤 {user_name} (ID: `{telegram_user_id}`)",
+                    f"📋 Compleanno DB: *{full_name}*\n"
+                    f"👤 Utente Telegram: {user_link}\n"
+                    f"🆔 Telegram ID: `{telegram_user_id}`",
                     parse_mode='Markdown'
                 )
             else:
@@ -1185,6 +1298,8 @@ class BirthdayManager:
         
         # Clean up
         context.user_data.pop(KEY_SELECTED_BIRTHDAY_ID, None)
+        context.user_data.pop('link_admin_id', None)
+        context.user_data.pop('link_in_group', None)
         
         return ConversationHandler.END
 

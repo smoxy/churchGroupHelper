@@ -48,6 +48,7 @@ class BirthdayMessageGenerator:
     def __init__(self):
         """Initialize the message generator with AI provider."""
         self.provider = detect_ai_provider()
+        # Note: get_chat_llm now includes automatic fallback for temperature errors
         self.llm = get_chat_llm(
             provider=self.provider,
             temperature=0.7,  # Creative but not too random

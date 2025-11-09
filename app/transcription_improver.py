@@ -40,11 +40,13 @@ class TranscriptionImprover:
             else:
                 model_name = 'gpt-oss:20b'  # Default Ollama model
         
+        # Note: get_chat_llm now includes automatic fallback for temperature errors
         self._llm = get_chat_llm(
             provider=provider,
             temperature=0.2,  # Lower temperature for more consistent formatting
             model_override=model_name
         )
+        self._model_name = model_name
         self._chain = self._build_chain()
         logger.info(f"TranscriptionImprover initialized with provider: {provider}, model: {model_name}")
 

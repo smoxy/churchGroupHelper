@@ -1020,7 +1020,8 @@ class Database:
                         'birth_date': b.birth_date,
                         'comment': b.comment,
                         'group_ids': b.group_ids,
-                        'telegram_user_id': b.telegram_user_id
+                        'telegram_user_id': b.telegram_user_id,
+                        'gender_override': b.gender_override
                     })
             return result
     
@@ -1453,6 +1454,7 @@ class Database:
                     'age_min': text.age_min,
                     'age_max': text.age_max,
                     'gender_preference': text.gender_preference,
+                    'version': text.version,
                     'last_used_at': text.last_used_at,
                     'created_at': text.created_at
                 }

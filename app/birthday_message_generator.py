@@ -25,13 +25,12 @@ Environment Variables (managed by ai_provider module):
 """
 
 import logging
-import os
 from typing import List, Dict, Any, Optional
-from datetime import datetime
 
 # LangChain imports
 from langchain_core.prompts import ChatPromptTemplate, HumanMessagePromptTemplate
 from langchain_core.messages import SystemMessage
+from langchain_core.output_parsers import StrOutputParser
 
 from ai_provider import get_chat_llm, detect_ai_provider
 
@@ -54,6 +53,8 @@ class BirthdayMessageGenerator:
             temperature=0.7,  # Creative but not too random
             max_tokens=500  # Reasonable length for birthday messages
         )
+        self._gender_detector = None
+        self._gender_detector_unavailable = False
         logger.info(f"BirthdayMessageGenerator initialized with provider: {self.provider}")
     
     def _create_prompt_template(self) -> ChatPromptTemplate:
@@ -65,39 +66,111 @@ class BirthdayMessageGenerator:
         """
         system_message = SystemMessage(content="""Sei un assistente che genera messaggi di auguri di compleanno calorosi e personalizzati per una comunità cristiana.
 
-I tuoi messaggi devono essere:
-- Calorosi e affettuosi, ma rispettosi
-- Appropriati per l'età e il genere della persona
-- Includere il testo biblico fornito in modo naturale
-- Brevi e concisi (massimo 200 parole)
-- In italiano corretto e scorrevole
-- Adatti per essere inviati in un gruppo Telegram
+    I tuoi messaggi devono essere:
+    - Calorosi e affettuosi, ma rispettosi
+    - Appropriati per l'età e per il genere (maschio/femmina) della persona, adeguando aggettivi e pronomi
+    - Integrare ogni testo biblico fornito citando riferimento e significato pastorale
+    - Spiegare le NOTE DEL DATABASE (campo "commento"): specificano se il festeggiato è nel gruppo e chi può essere contattato per recapitarli gli auguri
+    - Evidenziare quando una persona non è presente nel gruppo e indicare chi può consegnare gli auguri
+    - Brevi e concisi (massimo 200 parole)
+    - In italiano corretto e scorrevole
+    - Adatti per essere inviati in un gruppo Telegram
 
-IMPORTANTE: Quando ci sono più persone, il messaggio è UNICO ma ogni persona riceve un testo biblico DEDICATO.
-Devi integrare tutti i testi biblici nel messaggio in modo armonioso.""")
+    IMPORTANTE: Quando ci sono più persone, il messaggio è UNICO ma ogni persona riceve un testo biblico DEDICATO.
+    Devi integrare tutti i testi biblici nel messaggio in modo armonioso.""")
         
-        human_template = """Genera un messaggio di auguri di compleanno per:
+        human_template = """Genera un messaggio di auguri di compleanno per la comunità, usando le informazioni seguenti.
 
-{people_info}
+    Informazioni sui festeggiati:
+    {people_info}
 
-{comments_info}
+    Note operative dal database (presenza nel gruppo e contatti):
+    {comments_info}
 
-Testi biblici da integrare nel messaggio:
-{biblical_texts}
+    Testi biblici da integrare nel messaggio:
+    {biblical_texts}
 
-Ricorda:
-- Se ci sono più persone, crea UN SOLO messaggio che le citi tutte
-- Ogni persona deve avere il SUO testo biblico dedicato
-- Integra i testi in modo naturale nel messaggio
-- Usa un tono appropriato per l'età e il genere
-- Se ci sono note/commenti, usali per personalizzare il messaggio (es. menzionare familiari presenti)
-- Mantieni il messaggio conciso ma significativo
+    Ricorda:
+    - Se ci sono più persone, crea UN SOLO messaggio che le citi tutte
+    - Ogni persona deve avere il SUO testo biblico dedicato
+    - Integra i testi in modo naturale nel messaggio
+    - Usa un tono appropriato per età e genere
+    - Se ci sono note/commenti, usali per personalizzare il messaggio e spiegare come raggiungerli
+        sections = []
+        for text, birthday in zip(biblical_texts, birthdays):
+            person_name = f"{birthday['first_name']} {birthday['last_name']}"
+            version = text.get('version') or 'versione predefinita'
+            section_lines = [
+                f"Per {person_name}:",
+                f"  Versetto {text['reference']} ({version})",
+                f"  Testo: \"{text['text']}\""
+            ]
 
-Messaggio:"""
+            meta_parts = []
+            if text.get('theme'):
+                meta_parts.append(f"tema {text['theme']}")
+            if text.get('language'):
+                meta_parts.append(f"lingua {text['language']}")
+            if text.get('age_min') or text.get('age_max'):
+                age_min = text.get('age_min')
+                age_max = text.get('age_max')
+                if age_min and age_max:
+                    meta_parts.append(f"fascia {age_min}-{age_max} anni")
+                elif age_min:
+                    meta_parts.append(f"da {age_min}+ anni")
+                else:
+                    meta_parts.append(f"fino a {age_max} anni")
+            if text.get('gender_preference'):
+                pref = text['gender_preference']
+                pref_label = 'maschile' if pref == 'M' else 'femminile' if pref == 'F' else pref
+                meta_parts.append(f"orientato a pubblico {pref_label}")
+            if meta_parts:
+                section_lines.append(f"  Metadati: {', '.join(meta_parts)}")
+            sections.append("\n".join(section_lines))
         
-        human_message = HumanMessagePromptTemplate.from_template(human_template)
-        
-        return ChatPromptTemplate.from_messages([system_message, human_message])
+        return "\n\n".join(sections)
+        """Lazily load gender detector if available."""
+        if self._gender_detector_unavailable:
+            return None
+        if self._gender_detector is not None:
+            return self._gender_detector
+        try:
+            import gender_guesser.detector as gender
+            self._gender_detector = gender.Detector()
+            return self._gender_detector
+        except ImportError:
+            logger.debug("gender-guesser not installed; skipping automatic gender inference for birthday messages")
+            self._gender_detector_unavailable = True
+            return None
+
+    def _detect_gender_code(self, birthday: Dict[str, Any]) -> Optional[str]:
+        """Return 'M' or 'F' when gender can be inferred for a birthday entry."""
+        explicit = birthday.get('gender') or birthday.get('gender_override')
+        if isinstance(explicit, str):
+            explicit_code = explicit.strip().upper()
+            if explicit_code in {'M', 'F'}:
+                return explicit_code
+        first_name = birthday.get('first_name')
+        if not first_name:
+            return None
+        detector = self._get_gender_detector()
+        if not detector:
+            return None
+        result = detector.get_gender(first_name)
+        if result in ['male', 'mostly_male']:
+            return 'M'
+        if result in ['female', 'mostly_female']:
+            return 'F'
+        return None
+
+    def _describe_gender_label(self, birthday: Dict[str, Any]) -> Optional[str]:
+        """Return Italian label for the detected gender."""
+        code = self._detect_gender_code(birthday)
+        if code == 'M':
+            return 'maschio'
+        if code == 'F':
+            return 'femmina'
+        return None
     
     def _format_people_info(
         self,
@@ -112,17 +185,19 @@ Messaggio:"""
         Returns:
             Formatted string with people information
         """
-        if len(birthdays) == 1:
-            b = birthdays[0]
-            age_info = f", {b.get('age', '?')} anni" if b.get('age') else ""
-            gender_info = f" ({b.get('gender', 'sconosciuto')})" if b.get('gender') else ""
-            return f"- {b['first_name']} {b['last_name']}{age_info}{gender_info}"
-        
         lines = []
         for b in birthdays:
-            age_info = f", {b.get('age', '?')} anni" if b.get('age') else ""
-            gender_info = f" ({b.get('gender', 'sconosciuto')})" if b.get('gender') else ""
-            lines.append(f"- {b['first_name']} {b['last_name']}{age_info}{gender_info}")
+            name = f"{b['first_name']} {b['last_name']}".strip()
+            descriptors = []
+            if b.get('age'):
+                descriptors.append(f"{b.get('age')} anni")
+            gender_label = self._describe_gender_label(b)
+            if gender_label:
+                descriptors.append(f"genere: {gender_label}")
+            if descriptors:
+                lines.append(f"- {name} ({', '.join(descriptors)})")
+            else:
+                lines.append(f"- {name}")
         
         return "\n".join(lines)
     
@@ -141,14 +216,21 @@ Messaggio:"""
         """
         comments = []
         for b in birthdays:
-            if b.get('comment'):
-                name = f"{b['first_name']} {b['last_name']}"
-                comments.append(f"- {name}: {b['comment']}")
+            comment = (b.get('comment') or '').strip()
+            if not comment:
+                continue
+            name = f"{b['first_name']} {b['last_name']}"
+            comments.append(
+                f"- {name}: {comment}\n  (usa queste indicazioni per capire se è nel gruppo e chi può fargli arrivare gli auguri)"
+            )
         
         if not comments:
-            return ""
+            return "Nessuna nota specifica su presenza o contatti."
         
-        return "Note aggiuntive (usa queste informazioni per personalizzare il messaggio):\n" + "\n".join(comments)
+        return (
+            "Note su presenza nel gruppo e contatti utili:\n" +
+            "\n".join(comments)
+        )
     
     def _format_biblical_texts(
         self,
@@ -217,14 +299,13 @@ Messaggio:"""
             biblical_texts_info = self._format_biblical_texts(biblical_texts, birthdays)
             
             # Generate message using AI
-            chain = prompt | self.llm
-            response = chain.invoke({
+            parser = StrOutputParser()
+            chain = prompt | self.llm | parser
+            message = chain.invoke({
                 "people_info": people_info,
                 "comments_info": comments_info,
                 "biblical_texts": biblical_texts_info
-            })
-            
-            message = response.content.strip()
+            }).strip()
             
             # Validate message
             if not self._validate_message(message):

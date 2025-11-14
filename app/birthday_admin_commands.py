@@ -1069,8 +1069,7 @@ class BirthdayAdminCommands:
                 if self.db.biblical_text_exists(
                     group_id,
                     reference=row['reference'],
-                    version=row['version'],
-                    source='csv'
+                    version=row['version']
                 ):
                     group_stats[group_id]['duplicates'] += 1
                     continue

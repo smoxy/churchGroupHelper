@@ -17,6 +17,7 @@ All commands require admin privileges.
 import logging
 import os
 import csv
+import io
 from typing import Optional
 from io import StringIO
 
@@ -38,10 +39,18 @@ from birthday_scheduler import BirthdayScheduler
 
 logger = logging.getLogger(__name__)
 
-# Conversation states
+# Conversation states for birthdaysettings
 STATE_SETTINGS_MENU = 1
 STATE_SETTINGS_EDIT = 2
-STATE_CSV_UPLOAD = 3
+STATE_SELECT_GROUP_FOR_SETTINGS = 10
+
+# Conversation states for importbiblicaltexts
+STATE_SELECT_GROUPS_FOR_TEXTS = 20
+STATE_UPLOAD_TEXTS_CSV = 21
+
+# Conversation states for previewbirthday
+STATE_SELECT_GROUP_FOR_PREVIEW = 30
+STATE_SELECT_BIRTHDAY_FOR_PREVIEW = 31
 
 
 class BirthdayAdminCommands:
@@ -67,14 +76,61 @@ class BirthdayAdminCommands:
         Show birthday notification settings for the group.
         
         Command: /birthdaysettings
+        Works in both group and private chat:
+        - If in private: show group selection menu
+        - If in group: show settings directly
         """
         chat = update.effective_chat
         user = update.effective_user
         
-        # Check if command is in a group
+        # If in private chat, show group selection
+        if chat.type == 'private':
+            if not is_admin(user.id):
+                await update.message.reply_text(
+                    "❌ Non sei autorizzato a utilizzare questo comando."
+                )
+                return ConversationHandler.END
+            
+            # Get all authorized groups
+            groups_info = self.db.get_all_groups_info()
+            
+            if not groups_info:
+                await update.message.reply_text(
+                    "⚠️ Non ci sono gruppi autorizzati nel database."
+                )
+                return ConversationHandler.END
+            
+            # Show group selection menu
+            keyboard = []
+            for group in groups_info[:10]:  # Show up to 10 groups
+                group_id = group['group_id']
+                group_name = group['group_name'] or f"Gruppo {group_id}"
+                
+                keyboard.append([InlineKeyboardButton(
+                    f"📋 {group_name}",
+                    callback_data=f"bday_settings_group_{group_id}"
+                )])
+            
+            keyboard.append([InlineKeyboardButton(
+                "❌ Annulla",
+                callback_data="bday_settings_cancel"
+            )])
+            
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await update.message.reply_text(
+                "🎂 *Impostazioni Compleanni*\n\n"
+                "Seleziona il gruppo di cui vuoi visualizzare/modificare le impostazioni.",
+                reply_markup=reply_markup,
+                parse_mode='Markdown'
+            )
+            
+            return STATE_SELECT_GROUP_FOR_SETTINGS
+        
+        # If in group, show settings directly
         if chat.type not in ['group', 'supergroup']:
             await update.message.reply_text(
-                "❌ Questo comando funziona solo nei gruppi."
+                "❌ Questo comando funziona nei gruppi o in chat privata."
             )
             return ConversationHandler.END
         
@@ -94,6 +150,28 @@ class BirthdayAdminCommands:
             )
             return ConversationHandler.END
         
+        # Store group_id in context for callbacks
+        context.user_data['birthday_settings_group_id'] = chat.id
+        
+        return await self._show_settings_menu(update, context, settings)
+    
+    async def _show_settings_menu(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE,
+        settings: dict
+    ) -> int:
+        """
+        Display the settings menu for a group.
+        
+        Args:
+            update: Update object
+            context: Callback context
+            settings: Group birthday settings
+            
+        Returns:
+            STATE_SETTINGS_MENU
+        """
         # Format settings message
         message = f"🎂 <b>Impostazioni Compleanni</b>\n\n"
         message += f"Gruppo: {settings['group_name']}\n\n"
@@ -114,16 +192,56 @@ class BirthdayAdminCommands:
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        await update.message.reply_text(
-            message,
-            parse_mode='HTML',
-            reply_markup=reply_markup
-        )
-        
-        # Store group_id in context for callbacks
-        context.user_data['birthday_settings_group_id'] = chat.id
+        if update.callback_query:
+            await update.callback_query.edit_message_text(
+                message,
+                parse_mode='HTML',
+                reply_markup=reply_markup
+            )
+        else:
+            await update.message.reply_text(
+                message,
+                parse_mode='HTML',
+                reply_markup=reply_markup
+            )
         
         return STATE_SETTINGS_MENU
+    
+    async def handle_settings_group_selection(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE
+    ) -> int:
+        """
+        Handle group selection callback for settings in private chat.
+        
+        Returns:
+            STATE_SETTINGS_MENU or ConversationHandler.END
+        """
+        query = update.callback_query
+        await query.answer()
+        
+        if query.data == "bday_settings_cancel":
+            await query.edit_message_text("❌ Operazione annullata.")
+            return ConversationHandler.END
+        
+        if query.data.startswith("bday_settings_group_"):
+            group_id = int(query.data.replace("bday_settings_group_", ""))
+            
+            # Get settings for this group
+            settings = self.db.get_group_birthday_settings(group_id)
+            
+            if not settings:
+                await query.edit_message_text("❌ Impostazioni non trovate per questo gruppo.")
+                return ConversationHandler.END
+            
+            # Store group_id in context for callbacks
+            context.user_data['birthday_settings_group_id'] = group_id
+            
+            # Show settings menu
+            return await self._show_settings_menu(query.update, context, settings)
+        
+        return STATE_SELECT_GROUP_FOR_SETTINGS
     
     async def handle_settings_callback(
         self,
@@ -285,96 +403,277 @@ class BirthdayAdminCommands:
         self,
         update: Update,
         context: ContextTypes.DEFAULT_TYPE
-    ) -> None:
+    ) -> int:
         """
-        Preview a birthday message for a specific person.
+        Start the birthday preview process.
         
-        Command: /previewbirthday <birthday_id>
+        Command: /previewbirthday
+        Only works in private chat. Guides user through:
+        1. Group selection
+        2. Birthday selection
+        3. Preview generation and display
         """
         chat = update.effective_chat
         user = update.effective_user
         
-        # Check admin
-        if not await is_admin(update, context, user.id, chat.id):
+        # Check if in private chat
+        if chat.type != 'private':
             await update.message.reply_text(
-                "❌ Solo gli amministratori possono usare questo comando."
+                "⚠️ Questo comando può essere utilizzato solo in chat privata con il bot."
             )
-            return
+            return ConversationHandler.END
         
-        # Parse birthday_id
-        if not context.args or len(context.args) < 1:
+        # Check if user is admin
+        if not is_admin(user.id):
             await update.message.reply_text(
-                "❌ Uso: /previewbirthday <birthday_id>\n\n"
-                "Usa /listbirthdays per vedere gli ID."
+                "⚠️ Non sei autorizzato a utilizzare questo comando."
             )
-            return
+            return ConversationHandler.END
         
-        try:
-            birthday_id = int(context.args[0])
-        except ValueError:
-            await update.message.reply_text("❌ ID compleanno non valido.")
-            return
+        # Get all authorized groups
+        groups_info = self.db.get_all_groups_info()
         
-        # Get birthday
-        birthday = self.db.get_birthday_by_id(birthday_id)
-        if not birthday:
-            await update.message.reply_text(f"❌ Compleanno {birthday_id} non trovato.")
-            return
-        
-        # Check if birthday is in this group
-        if chat.id not in birthday['group_ids']:
+        if not groups_info:
             await update.message.reply_text(
-                f"❌ Il compleanno {birthday_id} non è configurato per questo gruppo."
+                "⚠️ Non ci sono gruppi autorizzati nel database."
             )
-            return
+            return ConversationHandler.END
         
-        # Get settings
-        settings = self.db.get_group_birthday_settings(chat.id)
+        # Try to update group names from Telegram API
+        await self._update_group_names(context, groups_info)
         
-        # Select biblical text
-        biblical_text = self.text_selector.select_text(
-            group_id=chat.id,
-            birthday=birthday,
-            language=settings.get('language', 'it')
-        )
+        # Show group selection menu
+        keyboard = []
+        for group in groups_info[:10]:
+            group_id = group['group_id']
+            group_name = group['group_name'] or f"Gruppo {group_id}"
+            
+            keyboard.append([InlineKeyboardButton(
+                f"📋 {group_name}",
+                callback_data=f"preview_group_{group_id}"
+            )])
         
-        if not biblical_text:
-            await update.message.reply_text(
-                "❌ Nessun testo biblico disponibile per questo gruppo.\n\n"
-                "Usa /importbiblicaltexts per importare testi."
-            )
-            return
+        keyboard.append([InlineKeyboardButton(
+            "❌ Annulla",
+            callback_data="preview_cancel"
+        )])
         
-        # Generate message
-        use_ai = settings.get('birthday_ai_enabled', 1) == 1
-        message = self.message_generator.generate_message(
-            birthdays=[birthday],
-            biblical_texts=[biblical_text],
-            use_ai=use_ai
-        )
-        
-        if not message:
-            await update.message.reply_text("❌ Errore nella generazione del messaggio.")
-            return
-        
-        # Add mention if enabled
-        mention_enabled = settings.get('birthday_mention_enabled', 0) == 1
-        if mention_enabled:
-            message = self.message_generator.add_mention_if_enabled(
-                message=message,
-                birthday=birthday,
-                mention_enabled=mention_enabled
-            )
-        
-        # Send preview
-        preview_header = f"📝 <b>ANTEPRIMA MESSAGGIO COMPLEANNO</b>\n\n"
-        preview_header += f"<i>Questo messaggio NON sarà inviato, è solo un'anteprima.</i>\n\n"
-        preview_header += f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        reply_markup = InlineKeyboardMarkup(keyboard)
         
         await update.message.reply_text(
-            preview_header + message,
-            parse_mode='HTML'
+            "📝 *Anteprima Messaggio Compleanno*\n\n"
+            "Seleziona il gruppo per il quale vuoi vedere un'anteprima del messaggio.",
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
         )
+        
+        return STATE_SELECT_GROUP_FOR_PREVIEW
+    
+    async def handle_preview_group_selection(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE
+    ) -> int:
+        """Handle group selection for preview."""
+        query = update.callback_query
+        await query.answer()
+        
+        if query.data == "preview_cancel":
+            await query.edit_message_text("❌ Operazione annullata.")
+            return ConversationHandler.END
+        
+        if query.data.startswith("preview_group_"):
+            group_id = int(query.data.replace("preview_group_", ""))
+            
+            # Store group_id in context
+            context.user_data['preview_group_id'] = group_id
+            
+            # Get birthdays for this group with pagination
+            birthdays = self.db.get_birthdays_by_group(group_id)
+            
+            if not birthdays:
+                await query.edit_message_text(
+                    "❌ Nessun compleanno trovato per questo gruppo."
+                )
+                return ConversationHandler.END
+            
+            # Store birthdays and reset page
+            context.user_data['preview_birthdays'] = birthdays
+            context.user_data['preview_birthday_page'] = 0
+            
+            # Show birthdays menu
+            return await self._show_preview_birthdays_menu(query, context)
+        
+        return STATE_SELECT_GROUP_FOR_PREVIEW
+    
+    async def _show_preview_birthdays_menu(
+        self,
+        query,
+        context: ContextTypes.DEFAULT_TYPE
+    ) -> int:
+        """Display birthday selection menu for preview."""
+        birthdays = context.user_data.get('preview_birthdays', [])
+        page = context.user_data.get('preview_birthday_page', 0)
+        
+        items_per_page = 10
+        start = page * items_per_page
+        end = start + items_per_page
+        current_birthdays = birthdays[start:end]
+        
+        keyboard = []
+        for birthday in current_birthdays:
+            label = f"{birthday['first_name']} {birthday['last_name'] or ''} ({birthday['birth_date']})"
+            keyboard.append([InlineKeyboardButton(
+                label,
+                callback_data=f"preview_birthday_{birthday['id']}"
+            )])
+        
+        # Add pagination buttons
+        pagination_row = []
+        if page > 0:
+            pagination_row.append(InlineKeyboardButton("◀️ Precedente", callback_data="preview_prev_page"))
+        
+        pagination_row.append(InlineKeyboardButton(
+            f"Pagina {page + 1}/{(len(birthdays) - 1) // items_per_page + 1}",
+            callback_data="preview_page_info"
+        ))
+        
+        if end < len(birthdays):
+            pagination_row.append(InlineKeyboardButton("Successiva ▶️", callback_data="preview_next_page"))
+        
+        if pagination_row:
+            keyboard.append(pagination_row)
+        
+        keyboard.append([InlineKeyboardButton("❌ Annulla", callback_data="preview_cancel")])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            "📝 *Seleziona il compleanno*\n\n"
+            f"Mostrando {len(current_birthdays)} di {len(birthdays)} compleanni.",
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+        
+        return STATE_SELECT_BIRTHDAY_FOR_PREVIEW
+    
+    async def handle_preview_pagination(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE
+    ) -> int:
+        """Handle pagination for birthday selection."""
+        query = update.callback_query
+        await query.answer()
+        
+        if query.data == "preview_cancel":
+            await query.edit_message_text("❌ Operazione annullata.")
+            context.user_data.pop('preview_group_id', None)
+            context.user_data.pop('preview_birthdays', None)
+            context.user_data.pop('preview_birthday_page', None)
+            return ConversationHandler.END
+        
+        if query.data == "preview_page_info":
+            await query.answer("ℹ️ Usa i pulsanti per navigare", show_alert=False)
+            return STATE_SELECT_BIRTHDAY_FOR_PREVIEW
+        
+        birthdays = context.user_data.get('preview_birthdays', [])
+        page = context.user_data.get('preview_birthday_page', 0)
+        items_per_page = 10
+        max_page = (len(birthdays) - 1) // items_per_page
+        
+        if query.data == "preview_prev_page":
+            if page > 0:
+                context.user_data['preview_birthday_page'] = page - 1
+        elif query.data == "preview_next_page":
+            if page < max_page:
+                context.user_data['preview_birthday_page'] = page + 1
+        
+        return await self._show_preview_birthdays_menu(query, context)
+    
+    async def handle_preview_birthday_selection(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE
+    ) -> int:
+        """Handle birthday selection and generate preview."""
+        query = update.callback_query
+        await query.answer()
+        
+        if query.data.startswith("preview_birthday_"):
+            birthday_id = int(query.data.replace("preview_birthday_", ""))
+            group_id = context.user_data.get('preview_group_id')
+            
+            # Get birthday
+            birthday = self.db.get_birthday_by_id(birthday_id)
+            if not birthday:
+                await query.edit_message_text("❌ Compleanno non trovato.")
+                return ConversationHandler.END
+            
+            # Check if birthday is in this group
+            if group_id not in birthday['group_ids']:
+                await query.edit_message_text(
+                    "❌ Il compleanno non è configurato per questo gruppo."
+                )
+                return ConversationHandler.END
+            
+            # Get settings
+            settings = self.db.get_group_birthday_settings(group_id)
+            
+            # Select biblical text
+            biblical_text = self.text_selector.select_text(
+                group_id=group_id,
+                birthday=birthday,
+                language=settings.get('language', 'it')
+            )
+            
+            if not biblical_text:
+                await query.edit_message_text(
+                    "❌ Nessun testo biblico disponibile per questo gruppo.\n\n"
+                    "Usa /importbiblicaltexts per importare testi."
+                )
+                return ConversationHandler.END
+            
+            # Generate message
+            use_ai = settings.get('birthday_ai_enabled', 1) == 1
+            message = self.message_generator.generate_message(
+                birthdays=[birthday],
+                biblical_texts=[biblical_text],
+                use_ai=use_ai
+            )
+            
+            if not message:
+                await query.edit_message_text("❌ Errore nella generazione del messaggio.")
+                return ConversationHandler.END
+            
+            # Add mention if enabled
+            mention_enabled = settings.get('birthday_mention_enabled', 0) == 1
+            if mention_enabled:
+                message = self.message_generator.add_mention_if_enabled(
+                    message=message,
+                    birthday=birthday,
+                    mention_enabled=mention_enabled
+                )
+            
+            # Send preview in private chat only
+            preview_header = f"📝 <b>ANTEPRIMA MESSAGGIO COMPLEANNO</b>\n\n"
+            preview_header += f"<i>Questo messaggio NON sarà inviato, è solo un'anteprima.</i>\n\n"
+            preview_header += f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            
+            # Edit the current message to show preview
+            await query.edit_message_text(
+                preview_header + message,
+                parse_mode='HTML'
+            )
+            
+            # Clean up
+            context.user_data.pop('preview_group_id', None)
+            context.user_data.pop('preview_birthdays', None)
+            context.user_data.pop('preview_birthday_page', None)
+            
+            return ConversationHandler.END
+        
+        return STATE_SELECT_BIRTHDAY_FOR_PREVIEW
     
     async def birthday_stats_command(
         self,
@@ -436,110 +735,333 @@ class BirthdayAdminCommands:
         context: ContextTypes.DEFAULT_TYPE
     ) -> int:
         """
-        Import biblical texts from CSV file.
+        Start the biblical texts import process.
         
         Command: /importbiblicaltexts
-        Then send CSV file as document.
+        Only works in private chat. Guides user through:
+        1. Group selection
+        2. CSV file upload
+        3. Processing and results
         """
         chat = update.effective_chat
         user = update.effective_user
         
-        # Check if in group
-        if chat.type not in ['group', 'supergroup']:
+        # Check if in private chat
+        if chat.type != 'private':
             await update.message.reply_text(
-                "❌ Questo comando funziona solo nei gruppi."
+                "⚠️ Questo comando può essere utilizzato solo in chat privata con il bot."
             )
             return ConversationHandler.END
         
-        # Check admin
-        if not await is_admin(update, context, user.id, chat.id):
+        # Check if user is admin
+        if not is_admin(user.id):
             await update.message.reply_text(
-                "❌ Solo gli amministratori possono usare questo comando."
+                "⚠️ Non sei autorizzato a utilizzare questo comando."
             )
             return ConversationHandler.END
         
-        message = "📖 <b>Importa Testi Biblici</b>\n\n"
-        message += "Invia un file CSV con i seguenti campi:\n\n"
-        message += "<code>reference,text,theme,age_min,age_max,gender_preference</code>\n\n"
-        message += "<b>Esempio:</b>\n"
-        message += '<code>"Giovanni 3:16","Perché Dio ha tanto amato...","amore",,,</code>\n\n'
-        message += "Usa /cancel per annullare."
+        # Initialize selected groups
+        context.user_data['biblical_texts_selected_groups'] = []
         
-        await update.message.reply_text(message, parse_mode='HTML')
+        # Get all authorized groups
+        groups_info = self.db.get_all_groups_info()
         
-        context.user_data['import_texts_group_id'] = chat.id
+        if not groups_info:
+            await update.message.reply_text(
+                "⚠️ Non ci sono gruppi autorizzati nel database.\n"
+                "Aggiungi prima dei gruppi con /addgroup"
+            )
+            return ConversationHandler.END
         
-        return STATE_CSV_UPLOAD
+        # Try to update group names from Telegram API
+        await self._update_group_names(context, groups_info)
+        
+        # Show group selection menu
+        await self._show_biblical_texts_group_selection_menu(update, context, groups_info)
+        
+        return STATE_SELECT_GROUPS_FOR_TEXTS
     
-    async def handle_csv_upload(
+    async def _update_group_names(
+        self,
+        context: ContextTypes.DEFAULT_TYPE,
+        groups_info: list
+    ):
+        """Try to update group names from Telegram API."""
+        for group in groups_info:
+            group_id = group['group_id']
+            try:
+                chat = await context.bot.get_chat(group_id)
+                if chat.title:
+                    self.db.update_group_name(group_id, chat.title)
+                    group['group_name'] = chat.title
+                    logger.info(f"Updated group name for {group_id}: {chat.title}")
+            except Exception as e:
+                logger.warning(f"Could not fetch group name for {group_id}: {e}")
+    
+    async def _show_biblical_texts_group_selection_menu(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE,
+        groups_info: list
+    ):
+        """Display the group selection menu for biblical texts import."""
+        selected_groups = context.user_data.get('biblical_texts_selected_groups', [])
+        
+        # Build the menu
+        keyboard = []
+        
+        # Show up to 5 groups at a time
+        for group in groups_info[:5]:
+            group_id = group['group_id']
+            group_name = group['group_name'] or f"Gruppo {group_id}"
+            
+            # Mark selected groups with checkmark
+            if group_id in selected_groups:
+                label = f"✅ {group_name}"
+            else:
+                label = f"⬜ {group_name}"
+            
+            keyboard.append([InlineKeyboardButton(
+                label,
+                callback_data=f"biblical_texts_group_{group_id}"
+            )])
+        
+        # Add "Done" button
+        keyboard.append([InlineKeyboardButton(
+            "✔️ Fatto - Continua",
+            callback_data="biblical_texts_done_selecting"
+        )])
+        
+        # Add "Cancel" button
+        keyboard.append([InlineKeyboardButton(
+            "❌ Annulla",
+            callback_data="biblical_texts_cancel"
+        )])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        message_text = (
+            "📖 *Importa Testi Biblici*\n\n"
+            "Seleziona i gruppi dove vuoi aggiungere i testi biblici.\n"
+            "Puoi selezionare più gruppi.\n\n"
+            f"Gruppi selezionati: *{len(selected_groups)}*\n\n"
+            "Clicca su un gruppo per selezionarlo/deselezionarlo.\n"
+            "Quando hai finito, clicca su '✔️ Fatto - Continua'."
+        )
+        
+        if update.callback_query:
+            await update.callback_query.edit_message_text(
+                message_text,
+                reply_markup=reply_markup,
+                parse_mode='Markdown'
+            )
+        else:
+            await update.message.reply_text(
+                message_text,
+                reply_markup=reply_markup,
+                parse_mode='Markdown'
+            )
+    
+    async def handle_biblical_texts_group_selection(
         self,
         update: Update,
         context: ContextTypes.DEFAULT_TYPE
     ) -> int:
-        """Handle CSV file upload for biblical texts."""
-        group_id = context.user_data.get('import_texts_group_id')
+        """Handle group selection/deselection callback for biblical texts."""
+        query = update.callback_query
+        await query.answer()
         
-        if not group_id:
-            await update.message.reply_text("❌ Sessione scaduta.")
+        data = query.data
+        
+        # Handle cancel
+        if data == "biblical_texts_cancel":
+            await query.edit_message_text("❌ Operazione annullata.")
             return ConversationHandler.END
         
-        # Get document
+        # Handle done selecting
+        if data == "biblical_texts_done_selecting":
+            selected_groups = context.user_data.get('biblical_texts_selected_groups', [])
+            
+            if not selected_groups:
+                await query.answer("⚠️ Seleziona almeno un gruppo!", show_alert=True)
+                return STATE_SELECT_GROUPS_FOR_TEXTS
+            
+            # Move to CSV upload
+            group_names = []
+            for group_id in selected_groups:
+                name = self.db.get_group_name_by_id(group_id)
+                group_names.append(name or f"Gruppo {group_id}")
+            
+            await query.edit_message_text(
+                f"✅ Hai selezionato {len(selected_groups)} gruppo/i:\n" +
+                "\n".join([f"• {name}" for name in group_names]) +
+                "\n\n📖 *Importa Testi Biblici*\n\n"
+                "Invia un file CSV con i seguenti campi:\n\n"
+                "`reference,text,theme,age_min,age_max,gender_preference`\n\n"
+                "*Esempio:*\n"
+                "`Giovanni 3:16,Perché Dio ha tanto amato il mondo...,amore,,,`\n\n"
+                "I campi `theme`, `age_min`, `age_max`, `gender_preference` sono opzionali.\n\n"
+                "Carica ora il file CSV.",
+                parse_mode='Markdown'
+            )
+            
+            return STATE_UPLOAD_TEXTS_CSV
+        
+        # Handle group toggle
+        if data.startswith("biblical_texts_group_"):
+            group_id = int(data.replace("biblical_texts_group_", ""))
+            selected_groups = context.user_data.get('biblical_texts_selected_groups', [])
+            
+            if group_id in selected_groups:
+                selected_groups.remove(group_id)
+            else:
+                selected_groups.append(group_id)
+            
+            context.user_data['biblical_texts_selected_groups'] = selected_groups
+            
+            # Refresh the menu
+            groups_info = self.db.get_all_groups_info()
+            await self._show_biblical_texts_group_selection_menu(update, context, groups_info)
+            
+            return STATE_SELECT_GROUPS_FOR_TEXTS
+        
+        return STATE_SELECT_GROUPS_FOR_TEXTS
+    
+    async def handle_biblical_texts_csv_upload(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE
+    ) -> int:
+        """Handle CSV file upload and process biblical texts."""
+        # Check if document is attached
+        if not update.message.document:
+            await update.message.reply_text(
+                "⚠️ Per favore, carica un file CSV.\n"
+                "Usa /importbiblicaltexts per ricominciare o /cancel per annullare."
+            )
+            return STATE_UPLOAD_TEXTS_CSV
+        
         document = update.message.document
         
-        if not document or not document.file_name.endswith('.csv'):
+        # Check if it's a CSV file
+        if not document.file_name.endswith('.csv'):
             await update.message.reply_text(
-                "❌ Per favore invia un file CSV.\n\nUsa /cancel per annullare."
+                "⚠️ Il file deve essere un CSV.\n"
+                "Carica un file con estensione .csv"
             )
-            return STATE_CSV_UPLOAD
+            return STATE_UPLOAD_TEXTS_CSV
         
+        # Download the file
         try:
-            # Download file
             file = await context.bot.get_file(document.file_id)
-            csv_content = await file.download_as_bytearray()
-            csv_text = csv_content.decode('utf-8')
+            file_bytes = await file.download_as_bytearray()
             
-            # Parse and import
-            count = 0
-            reader = csv.DictReader(StringIO(csv_text))
+            # Process CSV
+            selected_groups = context.user_data.get('biblical_texts_selected_groups', [])
+            result = await self._process_biblical_texts_csv(file_bytes, selected_groups)
             
-            for row in reader:
+            # Send results
+            await update.message.reply_text(
+                result['message'],
+                parse_mode='Markdown'
+            )
+            
+            # Clean up user data
+            context.user_data.pop('biblical_texts_selected_groups', None)
+            
+            return ConversationHandler.END
+            
+        except Exception as e:
+            logger.error(f"Error processing biblical texts CSV: {e}", exc_info=True)
+            await update.message.reply_text(
+                f"❌ Errore durante l'elaborazione del file:\n{str(e)}\n\n"
+                "Verifica il formato del CSV e riprova."
+            )
+            return STATE_UPLOAD_TEXTS_CSV
+    
+    async def _process_biblical_texts_csv(
+        self,
+        file_bytes: bytearray,
+        group_ids: list
+    ) -> dict:
+        """Process CSV file and import biblical texts."""
+        # Decode file
+        text = file_bytes.decode('utf-8-sig')
+        if text and text[0] == '\ufeff':
+            text = text.lstrip('\ufeff')
+        
+        # Parse CSV
+        csv_reader = csv.DictReader(io.StringIO(text))
+        
+        success_count = 0
+        error_count = 0
+        errors = []
+        
+        for row_num, row in enumerate(csv_reader, start=2):
+            try:
                 reference = row.get('reference', '').strip()
-                text = row.get('text', '').strip()
+                text_content = row.get('text', '').strip()
                 
-                if not reference or not text:
-                    continue
+                if not reference or not text_content:
+                    raise ValueError("Riferimento o testo mancante")
                 
                 theme = row.get('theme', '').strip() or None
                 age_min = int(row['age_min']) if row.get('age_min', '').strip() else None
                 age_max = int(row['age_max']) if row.get('age_max', '').strip() else None
                 gender_pref = row.get('gender_preference', '').strip() or None
                 
-                text_id = self.db.add_biblical_text(
-                    group_id=group_id,
-                    reference=reference,
-                    text=text,
-                    language='it',
-                    theme=theme,
-                    age_min=age_min,
-                    age_max=age_max,
-                    gender_preference=gender_pref
-                )
+                # Add to each selected group
+                for group_id in group_ids:
+                    text_id = self.db.add_biblical_text(
+                        group_id=group_id,
+                        reference=reference,
+                        text=text_content,
+                        language='it',
+                        theme=theme,
+                        age_min=age_min,
+                        age_max=age_max,
+                        gender_preference=gender_pref
+                    )
+                    
+                    if text_id:
+                        success_count += 1
                 
-                if text_id:
-                    count += 1
-            
-            await update.message.reply_text(
-                f"✅ Importati {count} testi biblici con successo!"
-            )
-            
-            return ConversationHandler.END
+            except Exception as e:
+                error_count += 1
+                errors.append(f"Riga {row_num}: {str(e)}")
+                logger.warning(f"Error processing row {row_num}: {e}")
         
-        except Exception as e:
-            logger.error(f"Error importing CSV: {e}")
-            await update.message.reply_text(
-                f"❌ Errore nell'importazione: {str(e)}\n\nRiprova o usa /cancel."
-            )
-            return STATE_CSV_UPLOAD
+        # Build result message
+        message = f"✅ *Importazione completata*\n\n"
+        message += f"✔️ Importati con successo: *{success_count}*\n"
+        
+        if error_count > 0:
+            message += f"❌ Errori: *{error_count}*\n\n"
+            if errors:
+                message += "*Dettagli errori:*\n"
+                for error in errors[:10]:
+                    message += f"• {error}\n"
+                if len(errors) > 10:
+                    message += f"... e altri {len(errors) - 10} errori\n"
+        
+        return {
+            'success_count': success_count,
+            'error_count': error_count,
+            'errors': errors,
+            'message': message
+        }
+    
+    async def cancel_command(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE
+    ) -> int:
+        """Cancel current operation."""
+        context.user_data.pop('biblical_texts_selected_groups', None)
+        context.user_data.pop('birthday_settings_group_id', None)
+        context.user_data.pop('birthday_settings_action', None)
+        await update.message.reply_text("❌ Operazione annullata.")
+        return ConversationHandler.END
 
 
 def get_birthday_admin_conversation_handler(db: Database) -> ConversationHandler:
@@ -556,24 +1078,86 @@ def get_birthday_admin_conversation_handler(db: Database) -> ConversationHandler
     
     return ConversationHandler(
         entry_points=[
-            CommandHandler('birthdaysettings', commands.birthday_settings_command),
-            CommandHandler('importbiblicaltexts', commands.import_biblical_texts_command)
+            CommandHandler('birthdaysettings', commands.birthday_settings_command)
         ],
         states={
+            STATE_SELECT_GROUP_FOR_SETTINGS: [
+                CallbackQueryHandler(commands.handle_settings_group_selection)
+            ],
             STATE_SETTINGS_MENU: [
                 CallbackQueryHandler(commands.handle_settings_callback, pattern='^bday_')
             ],
             STATE_SETTINGS_EDIT: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, commands.handle_settings_input),
-                CommandHandler('cancel', commands.cancel_settings)
-            ],
-            STATE_CSV_UPLOAD: [
-                MessageHandler(filters.Document.ALL, commands.handle_csv_upload),
-                CommandHandler('cancel', commands.cancel_settings)
+                CommandHandler('cancel', commands.cancel_command)
             ]
         },
         fallbacks=[
-            CommandHandler('cancel', commands.cancel_settings)
+            CommandHandler('cancel', commands.cancel_command)
+        ],
+        per_message=False
+    )
+
+
+def get_import_biblical_texts_conversation_handler(db: Database) -> ConversationHandler:
+    """
+    Create the conversation handler for importing biblical texts.
+    
+    Args:
+        db: Database instance
+        
+    Returns:
+        ConversationHandler for biblical texts import
+    """
+    commands = BirthdayAdminCommands(db)
+    
+    return ConversationHandler(
+        entry_points=[
+            CommandHandler('importbiblicaltexts', commands.import_biblical_texts_command)
+        ],
+        states={
+            STATE_SELECT_GROUPS_FOR_TEXTS: [
+                CallbackQueryHandler(commands.handle_biblical_texts_group_selection)
+            ],
+            STATE_UPLOAD_TEXTS_CSV: [
+                MessageHandler(filters.Document.ALL, commands.handle_biblical_texts_csv_upload),
+                CommandHandler('cancel', commands.cancel_command)
+            ]
+        },
+        fallbacks=[
+            CommandHandler('cancel', commands.cancel_command)
+        ],
+        per_message=False
+    )
+
+
+def get_preview_birthday_conversation_handler(db: Database) -> ConversationHandler:
+    """
+    Create the conversation handler for previewing birthday messages.
+    
+    Args:
+        db: Database instance
+        
+    Returns:
+        ConversationHandler for birthday preview
+    """
+    commands = BirthdayAdminCommands(db)
+    
+    return ConversationHandler(
+        entry_points=[
+            CommandHandler('previewbirthday', commands.preview_birthday_command)
+        ],
+        states={
+            STATE_SELECT_GROUP_FOR_PREVIEW: [
+                CallbackQueryHandler(commands.handle_preview_group_selection)
+            ],
+            STATE_SELECT_BIRTHDAY_FOR_PREVIEW: [
+                CallbackQueryHandler(commands.handle_preview_pagination, pattern='^preview_(prev|next)_page$|^preview_page_info$|^preview_cancel$'),
+                CallbackQueryHandler(commands.handle_preview_birthday_selection, pattern='^preview_birthday_')
+            ]
+        },
+        fallbacks=[
+            CommandHandler('cancel', commands.cancel_command)
         ],
         per_message=False
     )
@@ -589,11 +1173,12 @@ def register_birthday_admin_commands(application, db: Database) -> None:
     """
     commands = BirthdayAdminCommands(db)
     
-    # Conversation handler for settings and import
+    # Conversation handlers for settings, import, and preview
     application.add_handler(get_birthday_admin_conversation_handler(db))
+    application.add_handler(get_import_biblical_texts_conversation_handler(db))
+    application.add_handler(get_preview_birthday_conversation_handler(db))
     
     # Simple command handlers
-    application.add_handler(CommandHandler('previewbirthday', commands.preview_birthday_command))
     application.add_handler(CommandHandler('birthdaystats', commands.birthday_stats_command))
     
     logger.info("Birthday admin commands registered")

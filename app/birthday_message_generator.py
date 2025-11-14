@@ -97,7 +97,8 @@ Ricorda:
 - Usa un tono appropriato per età e genere
 - Se ci sono note/commenti, TRASFORMA l'informazione in modo narrativo: ad esempio se il commento dice "NO - c'è nonna Claudia" allora vuol dire che nel gruppo la persona non è presente, ma c'è la nonna che potrà far avere gli auguri di tutti quanti, quindi SCRIVI "<NOME DELLA PERSONA> non è presente nel gruppo, ma c'è la nonna Claudia che potrà far arrivare tutto il nostro affetto" o simile - MAI copiare il commento letteralmente
 - Mantieni il messaggio conciso ma significativo
-- Usa HTML per la formattazione: <b>bold</b>, <i>italic</i>, <u>underline</u>, <br/> per le linee vuote
+- Usa HTML per la formattazione: <b>bold</b>, <i>italic</i>, <u>underline</u>
+- Per le interruzioni di riga usa SOLO newline normali (\\n), MAI <br/> o altri tag HTML per line break
 
 Messaggio:"""
 
@@ -415,10 +416,10 @@ Messaggio:"""
             ref_safe = self._escape_html(t["reference"])
             text_safe = self._escape_html(t["text"])
             
-            message = f"🎉 Buon compleanno <b>{name_safe}</b>! 🎂<br/><br/>"
-            message += f"In questo giorno speciale, vogliamo augurarti ogni bene e ricordarti questo bellissimo versetto:<br/><br/>"
-            message += f'📖 <i>{ref_safe}</i><br/>'
-            message += f'"{text_safe}"<br/><br/>'
+            message = f"🎉 Buon compleanno <b>{name_safe}</b>! 🎂\n\n"
+            message += f"In questo giorno speciale, vogliamo augurarti ogni bene e ricordarti questo bellissimo versetto:\n\n"
+            message += f'📖 <i>{ref_safe}</i>\n'
+            message += f'"{text_safe}"\n\n'
             message += f"Che Dio ti benedica oggi e sempre! 🙏✨"
             
             return message
@@ -432,16 +433,16 @@ Messaggio:"""
         else:
             names_str = ", ".join(names_safe[:-1]) + f" e {names_safe[-1]}"
         
-        message = f"🎉 Buon compleanno <b>{names_str}</b>! 🎂<br/><br/>"
-        message += f"In questo giorno speciale, vogliamo augurarvi ogni bene e condividere con voi questi versetti:<br/><br/>"
+        message = f"🎉 Buon compleanno <b>{names_str}</b>! 🎂\n\n"
+        message += f"In questo giorno speciale, vogliamo augurarvi ogni bene e condividere con voi questi versetti:\n\n"
         
         for b, t in zip(birthdays, biblical_texts):
             person_name = f"{b['first_name']} {b['last_name']}"
             person_name_safe = self._escape_html(person_name)
             ref_safe = self._escape_html(t["reference"])
             text_safe = self._escape_html(t["text"])
-            message += f"Per <b>{person_name_safe}</b>:<br/>"
-            message += f'📖 <i>{ref_safe}</i>: "{text_safe}"<br/><br/>'
+            message += f"Per <b>{person_name_safe}</b>:\n"
+            message += f'📖 <i>{ref_safe}</i>: "{text_safe}"\n\n'
         
         message += f"Che Dio vi benedica oggi e sempre! 🙏✨"
         

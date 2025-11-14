@@ -66,69 +66,42 @@ class BirthdayMessageGenerator:
         """
         system_message = SystemMessage(content="""Sei un assistente che genera messaggi di auguri di compleanno calorosi e personalizzati per una comunità cristiana.
 
-    I tuoi messaggi devono essere:
-    - Calorosi e affettuosi, ma rispettosi
-    - Appropriati per l'età e per il genere (maschio/femmina) della persona, adeguando aggettivi e pronomi
-    - Integrare ogni testo biblico fornito citando riferimento e significato pastorale
-    - Spiegare con chiarezza le NOTE DEL DATABASE (campo "commento"): indicano chi è presente nel gruppo e chi può essere contattato per far arrivare gli auguri
-    - Dichiarare esplicitamente chi recapita gli auguri quando la nota lo specifica
-    - Brevi e concisi (massimo 200 parole)
-    - In italiano corretto e scorrevole
-    - Adatti per essere inviati in un gruppo Telegram
+I tuoi messaggi devono essere:
+- Calorosi e affettuosi, ma rispettosi
+- Appropriati per l'età e per il genere (maschio/femmina) della persona, adeguando aggettivi e pronomi
+- Integrare ogni testo biblico fornito citando riferimento e significato pastorale
+- Spiegare con chiarezza le NOTE DEL DATABASE (campo "commento"): indicano chi è presente nel gruppo e chi può essere contattato per far arrivare gli auguri
+- Dichiarare esplicitamente chi recapita gli auguri quando la nota lo specifica
+- Brevi e concisi (massimo 200 parole)
+- In italiano corretto e scorrevole
+- Adatti per essere inviati in un gruppo Telegram
 
-    IMPORTANTE: Quando ci sono più persone, il messaggio è UNICO ma ogni persona riceve un testo biblico DEDICATO.
-    Devi integrare tutti i testi biblici nel messaggio in modo armonioso.""")
+IMPORTANTE: Quando ci sono più persone, il messaggio è UNICO ma ogni persona riceve un testo biblico DEDICATO.
+Devi integrare tutti i testi biblici nel messaggio in modo armonioso.""")
         
         human_template = """Genera un messaggio di auguri di compleanno per la comunità, usando le informazioni seguenti.
 
-    Informazioni sui festeggiati:
-    {people_info}
+Informazioni sui festeggiati:
+{people_info}
 
-    Note operative dal database (presenza nel gruppo e contatti: ripeti questi riferimenti nel messaggio):
-    {comments_info}
+Note operative dal database (presenza nel gruppo e contatti: ripeti questi riferimenti nel messaggio):
+{comments_info}
 
-    Testi biblici da integrare nel messaggio:
-    {biblical_texts}
+Testi biblici da integrare nel messaggio:
+{biblical_texts}
 
-    Ricorda:
-    - Se ci sono più persone, crea UN SOLO messaggio che le citi tutte
-    - Ogni persona deve avere il SUO testo biblico dedicato
-    - Integra i testi in modo naturale nel messaggio
-    - Usa un tono appropriato per età e genere
-    - Se ci sono note/commenti, trasforma chiaramente l'informazione in "Nel gruppo c'è..." o "Per recapitare gli auguri rivolgersi a..."
-        sections = []
-        for text, birthday in zip(biblical_texts, birthdays):
-            person_name = f"{birthday['first_name']} {birthday['last_name']}"
-            version = text.get('version') or 'versione predefinita'
-            section_lines = [
-                f"Per {person_name}:",
-                f"  Versetto {text['reference']} ({version})",
-                f"  Testo: \"{text['text']}\""
-            ]
+Ricorda:
+- Se ci sono più persone, crea UN SOLO messaggio che le citi tutte
+- Ogni persona deve avere il SUO testo biblico dedicato
+- Integra i testi in modo naturale nel messaggio
+- Usa un tono appropriato per età e genere
+- Se ci sono note/commenti, trasforma chiaramente l'informazione in "Nel gruppo c'è..." o "Per recapitare gli auguri rivolgersi a..."
+- Mantieni il messaggio conciso ma significativo
 
-            meta_parts = []
-            if text.get('theme'):
-                meta_parts.append(f"tema {text['theme']}")
-            if text.get('language'):
-                meta_parts.append(f"lingua {text['language']}")
-            if text.get('age_min') or text.get('age_max'):
-                age_min = text.get('age_min')
-                age_max = text.get('age_max')
-                if age_min and age_max:
-                    meta_parts.append(f"fascia {age_min}-{age_max} anni")
-                elif age_min:
-                    meta_parts.append(f"da {age_min}+ anni")
-                else:
-                    meta_parts.append(f"fino a {age_max} anni")
-            if text.get('gender_preference'):
-                pref = text['gender_preference']
-                pref_label = 'maschile' if pref == 'M' else 'femminile' if pref == 'F' else pref
-                meta_parts.append(f"orientato a pubblico {pref_label}")
-            if meta_parts:
-                section_lines.append(f"  Metadati: {', '.join(meta_parts)}")
-            sections.append("\n".join(section_lines))
-        
-        return "\n\n".join(sections)
+Messaggio:"""
+
+        human_message = HumanMessagePromptTemplate.from_template(human_template)
+        return ChatPromptTemplate.from_messages([system_message, human_message])
 
     @staticmethod
     def _escape_markdown(text: str) -> str:
@@ -165,6 +138,8 @@ class BirthdayMessageGenerator:
         return (
             f"{message}\n\n📞 *Chi recapita gli auguri:*\n{contact_block}"
         )
+
+    def _get_gender_detector(self):
         """Lazily load gender detector if available."""
         if self._gender_detector_unavailable:
             return None
@@ -286,15 +261,46 @@ class BirthdayMessageGenerator:
         if len(biblical_texts) != len(birthdays):
             logger.warning(f"Mismatch: {len(biblical_texts)} texts for {len(birthdays)} people")
         
-        lines = []
-        for i, (text, birthday) in enumerate(zip(biblical_texts, birthdays)):
+        sections = []
+        for text, birthday in zip(biblical_texts, birthdays):
             person_name = f"{birthday['first_name']} {birthday['last_name']}"
-            lines.append(f"Per {person_name}:")
-            lines.append(f'  {text["reference"]}: "{text["text"]}"')
-            if i < len(biblical_texts) - 1:
-                lines.append("")  # Blank line between texts
-        
-        return "\n".join(lines)
+            version = text.get('version') or 'versione predefinita'
+
+            section_lines = [
+                f"Per {person_name}:",
+                f"  Versetto {text['reference']} ({version})",
+                f"  Testo: \"{text['text']}\"",
+            ]
+
+            meta_parts = []
+            if text.get('theme'):
+                meta_parts.append(f"tema {text['theme']}")
+            if text.get('language'):
+                meta_parts.append(f"lingua {text['language']}")
+            if text.get('age_min') or text.get('age_max'):
+                age_min = text.get('age_min')
+                age_max = text.get('age_max')
+                if age_min and age_max:
+                    meta_parts.append(f"fascia {age_min}-{age_max} anni")
+                elif age_min:
+                    meta_parts.append(f"da {age_min}+ anni")
+                else:
+                    meta_parts.append(f"fino a {age_max} anni")
+            if text.get('gender_preference'):
+                pref = str(text['gender_preference'])
+                if pref.upper() == 'M':
+                    pref_label = 'maschile'
+                elif pref.upper() == 'F':
+                    pref_label = 'femminile'
+                else:
+                    pref_label = pref
+                meta_parts.append(f"orientato a pubblico {pref_label}")
+            if meta_parts:
+                section_lines.append(f"  Metadati: {', '.join(meta_parts)}")
+
+            sections.append("\n".join(section_lines))
+
+        return "\n\n".join(sections)
     
     def generate_message(
         self,
@@ -321,11 +327,7 @@ class BirthdayMessageGenerator:
             logger.error(f"Mismatch: {len(birthdays)} birthdays but {len(biblical_texts)} texts")
             return None
         
-        # Use static template if AI disabled or if AI fails
-        if not use_ai:
-            return self._generate_static_template(birthdays, biblical_texts)
-        
-        message = None
+        ai_candidate = None
 
         if use_ai:
             try:
@@ -336,30 +338,45 @@ class BirthdayMessageGenerator:
 
                 parser = StrOutputParser()
                 chain = prompt | self.llm | parser
-                candidate = chain.invoke({
+                ai_candidate = chain.invoke({
                     "people_info": people_info,
                     "comments_info": comments_info,
                     "biblical_texts": biblical_texts_info
-                }).strip()
+                })
+                if ai_candidate:
+                    ai_candidate = ai_candidate.strip()
+                    logger.info("AI candidate generated (%d chars)", len(ai_candidate))
+            except Exception as exc:
+                logger.error("Error generating AI message: %s", exc)
 
-                if self._validate_message(candidate):
-                    message = candidate
-                    logger.info(f"Successfully generated AI message ({len(message)} chars)")
-                else:
-                    logger.warning("AI-generated message failed validation, using static template")
-            except Exception as e:
-                logger.error(f"Error generating AI message: {e}")
-                logger.info("Falling back to static template")
+        used_static_template = False
+        message_body = ai_candidate if ai_candidate else None
 
-        if not message:
-            message = self._generate_static_template(birthdays, biblical_texts)
+        if not message_body:
+            message_body = self._generate_static_template(birthdays, biblical_texts)
+            used_static_template = True
 
-        if not message:
+        if not message_body:
             return None
 
-        return self._attach_contact_info(message, birthdays)
+        final_message = self._attach_contact_info(message_body, birthdays)
+
+        if not self._validate_message(final_message):
+            if not used_static_template:
+                logger.warning("AI message failed final validation; retrying with static template")
+                fallback = self._generate_static_template(birthdays, biblical_texts)
+                used_static_template = True
+                if fallback:
+                    final_message = self._attach_contact_info(fallback, birthdays)
+            if not self._validate_message(final_message):
+                logger.warning(
+                    "Generated message still fails validation (%d chars); sending as-is",
+                    len(final_message) if final_message else 0
+                )
+
+        return final_message
     
-    def _validate_message(self, message: str) -> bool:
+    def _validate_message(self, message: Optional[str]) -> bool:
         """
         Validate generated message for length and basic content.
         
@@ -369,8 +386,12 @@ class BirthdayMessageGenerator:
         Returns:
             True if valid, False otherwise
         """
-        if not message or len(message) < 50:
-            logger.warning("Message too short")
+        if not message:
+            logger.warning("Message empty or None")
+            return False
+
+        if len(message) < 40:
+            logger.warning("Message too short (%d chars)", len(message))
             return False
         
         if len(message) > 2000:  # Telegram message limit is 4096, be conservative

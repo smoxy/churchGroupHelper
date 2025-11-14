@@ -136,13 +136,14 @@ class BiblicalTextSelector:
             # Get texts used in last 30 days for this group
             last_month = datetime.now() - timedelta(days=30)
             
-            used_ids = self.db.get_session().query(BirthdayMessage.biblical_text_id)\
-                .filter(
-                    BirthdayMessage.group_id == group_id,
-                    BirthdayMessage.created_at >= last_month,
-                    BirthdayMessage.biblical_text_id != None
-                ).distinct()\
-                .all()
+            with self.db.get_session() as session:
+                used_ids = session.query(BirthdayMessage.biblical_text_id)\
+                    .filter(
+                        BirthdayMessage.group_id == group_id,
+                        BirthdayMessage.created_at >= last_month,
+                        BirthdayMessage.biblical_text_id != None
+                    ).distinct()\
+                    .all()
             
             result = [row[0] for row in used_ids if row[0]]
             logger.debug(f"Texts used in last month for group {group_id}: {len(result)} texts")

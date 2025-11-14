@@ -33,11 +33,13 @@ from telegram.ext import (
 
 from database import Database
 from utils import is_admin
-from biblical_text_selector import BiblicalTextSelector, import_biblical_texts_from_csv
+from biblical_text_selector import BiblicalTextSelector
 from birthday_message_generator import BirthdayMessageGenerator
 from birthday_scheduler import BirthdayScheduler
 
 logger = logging.getLogger(__name__)
+
+BIBLICAL_TEXTS_DEFAULT_VERSION = os.getenv('BIBLICAL_TEXTS_DEFAULT_VERSION', 'CEI2008')
 
 # Conversation states for birthdaysettings
 STATE_SETTINGS_MENU = 1
@@ -897,10 +899,11 @@ class BirthdayAdminCommands:
                 "\n".join([f"• {name}" for name in group_names]) +
                 "\n\n📖 *Importa Testi Biblici*\n\n"
                 "Invia un file CSV con i seguenti campi:\n\n"
-                "`reference,text,theme,age_min,age_max,gender_preference`\n\n"
+                "`reference,text,version,theme,age_min,age_max,gender_preference`\n\n"
                 "*Esempio:*\n"
                 "`Giovanni 3:16,Perché Dio ha tanto amato il mondo...,amore,,,`\n\n"
                 "I campi `theme`, `age_min`, `age_max`, `gender_preference` sono opzionali.\n\n"
+                "La colonna `version` è facoltativa (usa il valore di default configurato).\n\n"
                 "Carica ora il file CSV.",
                 parse_mode='Markdown'
             )
@@ -989,66 +992,136 @@ class BirthdayAdminCommands:
         text = file_bytes.decode('utf-8-sig')
         if text and text[0] == '\ufeff':
             text = text.lstrip('\ufeff')
-        
-        # Parse CSV
+
         csv_reader = csv.DictReader(io.StringIO(text))
-        
-        success_count = 0
-        error_count = 0
-        errors = []
-        
+
+        valid_rows = []
+        parsing_errors = []
+
         for row_num, row in enumerate(csv_reader, start=2):
+            reference = row.get('reference', '').strip()
+            text_content = row.get('text', '').strip()
+            version = row.get('version', '').strip() or BIBLICAL_TEXTS_DEFAULT_VERSION
+            language = row.get('language', '').strip() or 'it'
+            theme = row.get('theme', '').strip() or None
+            gender_pref = row.get('gender_preference', '').strip() or None
+
+            if not reference or not text_content:
+                msg = f"Riga {row_num}: riferimento o testo mancante"
+                parsing_errors.append(msg)
+                logger.warning(msg)
+                continue
+
             try:
-                reference = row.get('reference', '').strip()
-                text_content = row.get('text', '').strip()
-                
-                if not reference or not text_content:
-                    raise ValueError("Riferimento o testo mancante")
-                
-                theme = row.get('theme', '').strip() or None
                 age_min = int(row['age_min']) if row.get('age_min', '').strip() else None
+            except ValueError:
+                msg = f"Riga {row_num}: age_min non valido ({row.get('age_min')})"
+                parsing_errors.append(msg)
+                logger.warning(msg)
+                continue
+
+            try:
                 age_max = int(row['age_max']) if row.get('age_max', '').strip() else None
-                gender_pref = row.get('gender_preference', '').strip() or None
-                
-                # Add to each selected group
-                for group_id in group_ids:
-                    text_id = self.db.add_biblical_text(
-                        group_id=group_id,
-                        reference=reference,
-                        text=text_content,
-                        language='it',
-                        theme=theme,
-                        age_min=age_min,
-                        age_max=age_max,
-                        gender_preference=gender_pref
+            except ValueError:
+                msg = f"Riga {row_num}: age_max non valido ({row.get('age_max')})"
+                parsing_errors.append(msg)
+                logger.warning(msg)
+                continue
+
+            valid_rows.append({
+                'row_num': row_num,
+                'reference': reference,
+                'text': text_content,
+                'language': language,
+                'version': version,
+                'theme': theme,
+                'age_min': age_min,
+                'age_max': age_max,
+                'gender_preference': gender_pref
+            })
+
+        if not valid_rows:
+            message = "❌ Nessun testo valido trovato nel CSV."
+            if parsing_errors:
+                message += "\n" + "\n".join(parsing_errors[:5])
+                if len(parsing_errors) > 5:
+                    message += f"\n... e altri {len(parsing_errors) - 5} messaggi"
+            return {
+                'message': message,
+                'errors': parsing_errors,
+                'group_stats': {},
+                'deleted': {}
+            }
+
+        deletion_summary = {}
+        for group_id in group_ids:
+            deleted = self.db.delete_biblical_texts_for_group(group_id)
+            deletion_summary[group_id] = deleted
+
+        group_stats = {
+            group_id: {'imported': 0, 'duplicates': 0, 'failed': 0}
+            for group_id in group_ids
+        }
+        insert_errors = []
+
+        for row in valid_rows:
+            for group_id in group_ids:
+                if self.db.biblical_text_exists(
+                    group_id,
+                    reference=row['reference'],
+                    version=row['version'],
+                    source='csv'
+                ):
+                    group_stats[group_id]['duplicates'] += 1
+                    continue
+
+                text_id = self.db.add_biblical_text(
+                    group_id=group_id,
+                    reference=row['reference'],
+                    text=row['text'],
+                    language=row['language'],
+                    version=row['version'],
+                    theme=row['theme'],
+                    age_min=row['age_min'],
+                    age_max=row['age_max'],
+                    gender_preference=row['gender_preference']
+                )
+
+                if text_id:
+                    group_stats[group_id]['imported'] += 1
+                else:
+                    group_stats[group_id]['failed'] += 1
+                    insert_errors.append(
+                        f"Gruppo {group_id}, riga {row['row_num']}: errore salvataggio"
                     )
-                    
-                    if text_id:
-                        success_count += 1
-                
-            except Exception as e:
-                error_count += 1
-                errors.append(f"Riga {row_num}: {str(e)}")
-                logger.warning(f"Error processing row {row_num}: {e}")
-        
-        # Build result message
-        message = f"✅ *Importazione completata*\n\n"
-        message += f"✔️ Importati con successo: *{success_count}*\n"
-        
-        if error_count > 0:
-            message += f"❌ Errori: *{error_count}*\n\n"
-            if errors:
-                message += "*Dettagli errori:*\n"
-                for error in errors[:10]:
-                    message += f"• {error}\n"
-                if len(errors) > 10:
-                    message += f"... e altri {len(errors) - 10} errori\n"
-        
+
+        message = "✅ *Importazione completata*\n\n"
+        message += f"Gruppi aggiornati: {len(group_ids)}\n"
+
+        for group_id in group_ids:
+            stats = group_stats[group_id]
+            deleted = deletion_summary.get(group_id, 0)
+            message += (
+                f"• Gruppo {group_id}: rimossi {deleted} testi precedenti, "
+                f"{stats['imported']} nuovi, {stats['duplicates']} duplicati"
+            )
+            if stats['failed']:
+                message += f", {stats['failed']} salvataggi falliti"
+            message += "\n"
+
+        combined_errors = parsing_errors + insert_errors
+        if combined_errors:
+            message += "\n⚠️ *Avvisi durante l'importazione:*\n"
+            for note in combined_errors[:5]:
+                message += f"• {note}\n"
+            if len(combined_errors) > 5:
+                message += f"... e altri {len(combined_errors) - 5} messaggi\n"
+
         return {
-            'success_count': success_count,
-            'error_count': error_count,
-            'errors': errors,
-            'message': message
+            'message': message,
+            'errors': combined_errors,
+            'group_stats': group_stats,
+            'deleted': deletion_summary
         }
     
     async def cancel_command(

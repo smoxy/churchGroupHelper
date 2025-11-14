@@ -138,14 +138,14 @@ class Database:
     # ==================== User Operations ====================
     
     def add_user(
-        self, 
-        user_id: int, 
-        church_group_id: int, 
-        name: str, 
-        surname: str = '', 
-        username: str = '', 
-        alias: str = '', 
-        birthday: Optional[datetime] = None, 
+        self,
+        user_id: int,
+        church_group_id: int,
+        name: str,
+        surname: str = '',
+        username: str = '',
+        alias: str = '',
+        birthday: Optional[datetime] = None,
         admin_of: Optional[List[int]] = None
     ) -> User:
         """
@@ -493,9 +493,9 @@ class Database:
             return False
 
     def update_group_limits(
-        self, 
-        group_id: int, 
-        message_limit: Optional[int] = None, 
+        self,
+        group_id: int,
+        message_limit: Optional[int] = None,
         time_limit: Optional[int] = None
     ) -> bool:
         """
@@ -542,9 +542,9 @@ class Database:
     # ==================== Authorized User Operations ====================
     
     def add_authorized_user(
-        self, 
-        user_id: int, 
-        first_name: str, 
+        self,
+        user_id: int,
+        first_name: str,
         language: str = 'it'
     ) -> AuthorizedUser:
         """
@@ -1329,6 +1329,7 @@ class Database:
         reference: str,
         text: str,
         language: str = 'it',
+        version: Optional[str] = None,
         theme: Optional[str] = None,
         age_min: Optional[int] = None,
         age_max: Optional[int] = None,
@@ -1346,6 +1347,7 @@ class Database:
             age_min: Minimum age suitability (null = any age)
             age_max: Maximum age suitability (null = any age)
             gender_preference: 'M', 'F', or null for any gender
+            version: Translation version (e.g., 'CEI2008') or None
             
         Returns:
             ID of created biblical text or None if failed
@@ -1361,7 +1363,8 @@ class Database:
                     age_min=age_min,
                     age_max=age_max,
                     gender_preference=gender_preference,
-                    created_at=datetime.now()
+                    created_at=datetime.now(),
+                    version=version
                 )
                 session.add(biblical_text)
                 session.commit()
@@ -1507,6 +1510,78 @@ class Database:
                 session.rollback()
                 logger.error(f"Error deleting biblical text {text_id}: {e}")
                 return False
+
+    def delete_biblical_texts_for_group(self, group_id: int) -> int:
+        """
+        Delete all biblical texts associated with a group.
+
+        Args:
+            group_id: Telegram group ID
+
+        Returns:
+            Number of deleted texts
+        """
+        with self.get_session() as session:
+            try:
+                deleted = session.query(BiblicalText).filter_by(group_id=group_id).delete()
+                session.commit()
+                logger.info(f"Deleted {deleted} biblical texts for group {group_id}")
+                return deleted
+            except Exception as e:
+                session.rollback()
+                logger.error(f"Error deleting biblical texts for group {group_id}: {e}")
+                return 0
+
+    def biblical_text_exists(
+        self,
+        group_id: int,
+        reference: Optional[str] = None,
+        version: Optional[str] = None
+    ) -> bool:
+        """
+        Check if a biblical text already exists for a group by reference and optional version.
+
+        Args:
+            group_id: The Telegram group ID
+            reference: Biblical reference string (e.g., 'Giovanni 3:16')
+            version: Translation version (e.g., 'CEI2008')
+
+        Returns:
+            True if text already imported, False otherwise
+        """
+        with self.get_session() as session:
+            try:
+                if not reference:
+                    return False
+
+                query = session.query(BiblicalText).filter(
+                    BiblicalText.group_id == group_id,
+                    BiblicalText.reference == reference
+                )
+
+                if version:
+                    query = query.filter(BiblicalText.version == version)
+
+                return query.first() is not None
+            except Exception as e:
+                logger.error(f"Error checking biblical text existence: {e}")
+                return False
+
+    def get_group_version_preference(self, group_id: int) -> str:
+        """
+        Get preferred biblical version for a group.
+        
+        Currently returns default version. Can be extended to read from group settings.
+        
+        Args:
+            group_id: The Telegram group ID
+            
+        Returns:
+            Version code (default: 'CEI2008')
+        """
+        # TODO: Read from AuthorizedGroup.biblical_version_preference (add field to model)
+        # For now, return default
+        return 'CEI2008'
 
     # ==================== Birthday Messages Tracking ====================
     

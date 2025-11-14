@@ -220,6 +220,9 @@ class BiblicalText(Base):
     created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
     last_used_at = Column(DateTime, nullable=True)  # Track when last used globally (across all birthdays)
     
+    # Translation metadata (stored for reporting/future auditing)
+    version = Column('external_version', String(50), nullable=True)  # Translation code (e.g., 'CEI2008')
+    
     # Relationships
     group = relationship('AuthorizedGroup', back_populates='biblical_texts')
     birthday_messages = relationship('BirthdayMessage', back_populates='biblical_text')

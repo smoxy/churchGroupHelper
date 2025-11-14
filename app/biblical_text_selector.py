@@ -121,18 +121,36 @@ class BiblicalTextSelector:
         """
         Get IDs of biblical texts used in the last month for this group.
         
+        Queries birthday_messages table to find which texts were used
+        recently in this specific group, enabling per-group monthly exclusion.
+        
         Args:
             group_id: Telegram group ID
             
         Returns:
-            List of biblical text IDs
+            List of biblical text IDs used in last 30 days
         """
-        # This requires querying birthday_messages table
-        # to find which texts were used recently in this group
+        try:
+            from database import BirthdayMessage
+            
+            # Get texts used in last 30 days for this group
+            last_month = datetime.now() - timedelta(days=30)
+            
+            used_ids = self.db.get_session().query(BirthdayMessage.biblical_text_id)\
+                .filter(
+                    BirthdayMessage.group_id == group_id,
+                    BirthdayMessage.created_at >= last_month,
+                    BirthdayMessage.biblical_text_id != None
+                ).distinct()\
+                .all()
+            
+            result = [row[0] for row in used_ids if row[0]]
+            logger.debug(f"Texts used in last month for group {group_id}: {len(result)} texts")
+            return result
         
-        # For now, we'll implement a simpler version
-        # TODO: Implement proper per-group monthly tracking
-        return []
+        except Exception as e:
+            logger.warning(f"Error getting texts used in last month: {e}")
+            return []
     
     def select_text(
         self,
@@ -273,71 +291,3 @@ class BiblicalTextSelector:
         return self.db.update_biblical_text_last_used(text_id)
 
 
-def import_biblical_texts_from_csv(
-    db: Database,
-    group_id: int,
-    csv_file_path: str,
-    language: str = 'it'
-) -> int:
-    """
-    Import biblical texts from a CSV file.
-    
-    CSV format expected:
-    reference,text,theme,age_min,age_max,gender_preference
-    
-    Example:
-    "Giovanni 3:16","Perché Dio ha tanto amato...","amore",,,
-    "Salmo 23:1","Il Signore è il mio pastore","conforto",60,,
-    "Proverbi 31:10","Una donna virtuosa...","saggezza",18,,F
-    
-    Args:
-        db: Database instance
-        group_id: Telegram group ID
-        csv_file_path: Path to CSV file
-        language: Language of texts (default: 'it')
-        
-    Returns:
-        Number of texts successfully imported
-    """
-    import csv
-    
-    count = 0
-    
-    try:
-        with open(csv_file_path, 'r', encoding='utf-8') as csvfile:
-            reader = csv.DictReader(csvfile)
-            
-            for row in reader:
-                reference = row.get('reference', '').strip()
-                text = row.get('text', '').strip()
-                
-                if not reference or not text:
-                    logger.warning(f"Skipping row with missing reference or text: {row}")
-                    continue
-                
-                theme = row.get('theme', '').strip() or None
-                age_min = int(row['age_min']) if row.get('age_min', '').strip() else None
-                age_max = int(row['age_max']) if row.get('age_max', '').strip() else None
-                gender_pref = row.get('gender_preference', '').strip() or None
-                
-                text_id = db.add_biblical_text(
-                    group_id=group_id,
-                    reference=reference,
-                    text=text,
-                    language=language,
-                    theme=theme,
-                    age_min=age_min,
-                    age_max=age_max,
-                    gender_preference=gender_pref
-                )
-                
-                if text_id:
-                    count += 1
-                    logger.info(f"Imported: {reference}")
-        
-        logger.info(f"Successfully imported {count} biblical texts from {csv_file_path}")
-        return count
-        
-    except Exception as e:
-        logger.error(f"Error importing biblical texts from CSV: {e}")
-        return count

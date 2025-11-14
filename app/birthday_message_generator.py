@@ -84,7 +84,7 @@ Devi integrare tutti i testi biblici nel messaggio in modo armonioso.""")
 Informazioni sui festeggiati:
 {people_info}
 
-Note operative dal database (presenza nel gruppo e contatti: ripeti questi riferimenti nel messaggio):
+Note operative dal database (INTEGRA QUESTE INFORMAZIONI IN MODO ORGANICO nel messaggio, non aggiungere un blocco separato):
 {comments_info}
 
 Testi biblici da integrare nel messaggio:
@@ -95,8 +95,9 @@ Ricorda:
 - Ogni persona deve avere il SUO testo biblico dedicato
 - Integra i testi in modo naturale nel messaggio
 - Usa un tono appropriato per età e genere
-- Se ci sono note/commenti, trasforma chiaramente l'informazione in "Nel gruppo c'è..." o "Per recapitare gli auguri rivolgersi a..."
+- Se ci sono note/commenti, TRASFORMA l'informazione in modo narrativo: ad esempio se il commento dice "NO - c'è nonna Claudia" allora vuol dire che nel gruppo la persona non è presente, ma c'è la nonna che potrà far avere gli auguri di tutti quanti, quindi SCRIVI "<NOME DELLA PERSONA> non è presente nel gruppo, ma c'è la nonna Claudia che potrà far arrivare tutto il nostro affetto" o simile - MAI copiare il commento letteralmente
 - Mantieni il messaggio conciso ma significativo
+- Usa HTML per la formattazione: <b>bold</b>, <i>italic</i>, <u>underline</u>, <br/> per le linee vuote
 
 Messaggio:"""
 
@@ -104,40 +105,24 @@ Messaggio:"""
         return ChatPromptTemplate.from_messages([system_message, human_message])
 
     @staticmethod
-    def _escape_markdown(text: str) -> str:
-        """Escape Markdown V2 special characters for safe Telegram output."""
+    def _escape_html(text: str) -> str:
+        """Escape HTML special characters for safe Telegram HTML output."""
         if not text:
             return ''
-        replacements = ['\\', '_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '!']
-        for char in replacements:
-            text = text.replace(char, f"\\{char}")
+        replacements = {
+            '&': '&amp;',
+            '<': '&lt;',
+            '>': '&gt;',
+            '"': '&quot;',
+            "'": '&#39;'
+        }
+        for char, escaped in replacements.items():
+            text = text.replace(char, escaped)
         return text
 
-    def _build_contact_block(self, birthdays: List[Dict[str, Any]]) -> str:
-        """Return formatted lines explaining who can deliver the wishes."""
-        lines = []
-        for b in birthdays:
-            comment = (b.get('comment') or '').strip()
-            if not comment:
-                continue
-            name = f"{b['first_name']} {b['last_name']}".strip()
-            safe_name = self._escape_markdown(name)
-            safe_comment = self._escape_markdown(comment)
-            lines.append(f"• Per {safe_name} rivolgersi a: {safe_comment}")
-        return "\n".join(lines)
-
-    def _attach_contact_info(
-        self,
-        message: str,
-        birthdays: List[Dict[str, Any]]
-    ) -> str:
-        """Append explicit contact information block when comments are present."""
-        contact_block = self._build_contact_block(birthdays)
-        if not contact_block:
-            return message
-        return (
-            f"{message}\n\n📞 *Chi recapita gli auguri:*\n{contact_block}"
-        )
+    def _has_comments(self, birthdays: List[Dict[str, Any]]) -> bool:
+        """Check if any birthday has a comment."""
+        return any((b.get('comment') or '').strip() for b in birthdays)
 
     def _get_gender_detector(self):
         """Lazily load gender detector if available."""
@@ -359,7 +344,7 @@ Messaggio:"""
         if not message_body:
             return None
 
-        final_message = self._attach_contact_info(message_body, birthdays)
+        final_message = message_body
 
         if not self._validate_message(final_message):
             if not used_static_template:
@@ -367,7 +352,7 @@ Messaggio:"""
                 fallback = self._generate_static_template(birthdays, biblical_texts)
                 used_static_template = True
                 if fallback:
-                    final_message = self._attach_contact_info(fallback, birthdays)
+                    final_message = fallback
             if not self._validate_message(final_message):
                 logger.warning(
                     "Generated message still fails validation (%d chars); sending as-is",
@@ -426,30 +411,37 @@ Messaggio:"""
             t = biblical_texts[0]
             
             name = f"{b['first_name']} {b['last_name']}"
+            name_safe = self._escape_html(name)
+            ref_safe = self._escape_html(t["reference"])
+            text_safe = self._escape_html(t["text"])
             
-            message = f"🎉 Buon compleanno {name}! 🎂\n\n"
-            message += f"In questo giorno speciale, vogliamo augurarti ogni bene e ricordarti questo bellissimo versetto:\n\n"
-            message += f'📖 {t["reference"]}\n'
-            message += f'"{t["text"]}"\n\n'
+            message = f"🎉 Buon compleanno <b>{name_safe}</b>! 🎂<br/><br/>"
+            message += f"In questo giorno speciale, vogliamo augurarti ogni bene e ricordarti questo bellissimo versetto:<br/><br/>"
+            message += f'📖 <i>{ref_safe}</i><br/>'
+            message += f'"{text_safe}"<br/><br/>'
             message += f"Che Dio ti benedica oggi e sempre! 🙏✨"
             
             return message
         
         # Multiple people template
         names = [f"{b['first_name']} {b['last_name']}" for b in birthdays]
+        names_safe = [self._escape_html(n) for n in names]
         
-        if len(names) == 2:
-            names_str = f"{names[0]} e {names[1]}"
+        if len(names_safe) == 2:
+            names_str = f"{names_safe[0]} e {names_safe[1]}"
         else:
-            names_str = ", ".join(names[:-1]) + f" e {names[-1]}"
+            names_str = ", ".join(names_safe[:-1]) + f" e {names_safe[-1]}"
         
-        message = f"🎉 Buon compleanno {names_str}! 🎂\n\n"
-        message += f"In questo giorno speciale, vogliamo augurarvi ogni bene e condividere con voi questi versetti:\n\n"
+        message = f"🎉 Buon compleanno <b>{names_str}</b>! 🎂<br/><br/>"
+        message += f"In questo giorno speciale, vogliamo augurarvi ogni bene e condividere con voi questi versetti:<br/><br/>"
         
         for b, t in zip(birthdays, biblical_texts):
             person_name = f"{b['first_name']} {b['last_name']}"
-            message += f"Per {person_name}:\n"
-            message += f'📖 {t["reference"]}: "{t["text"]}"\n\n'
+            person_name_safe = self._escape_html(person_name)
+            ref_safe = self._escape_html(t["reference"])
+            text_safe = self._escape_html(t["text"])
+            message += f"Per <b>{person_name_safe}</b>:<br/>"
+            message += f'📖 <i>{ref_safe}</i>: "{text_safe}"<br/><br/>'
         
         message += f"Che Dio vi benedica oggi e sempre! 🙏✨"
         

@@ -181,8 +181,60 @@ Messaggio completo con paragrafo contatti:"""
             text = text.replace(char, escaped)
         return text
 
+    def _build_contact_paragraph(self, birthdays: List[Dict[str, Any]]) -> str:
+        """
+        Build a fallback contact paragraph if AI doesn't add it properly.
+        
+        Args:
+            birthdays: List of birthday dictionaries
+            
+        Returns:
+            Contact paragraph string
+        """
+        paragraphs = []
+        for b in birthdays:
+            comment = (b.get('comment') or '').strip()
+            if not comment:
+                continue
+            
+            name = f"{b['first_name']} {b['last_name']}"
+            
+            # Parse comment to understand the pattern
+            comment_lower = comment.lower()
+            
+            if comment_lower.startswith('si'):
+                # Person is in the group
+                para = f"<i>Ci auguriamo che {name} possa leggere i nostri auguri direttamente qui nel gruppo! 🎉</i>"
+            elif 'no' in comment_lower:
+                # Extract who can deliver
+                # Common patterns: "NO - c'è...", "NO- c'è...", "NO c'è..."
+                # Find what comes after NO
+                parts = comment.split('-', 1)
+                if len(parts) > 1:
+                    who_can_deliver = parts[1].strip()
+                    # Clean up common patterns
+                    who_can_deliver = who_can_deliver.replace("'", "").replace("\\", "")
+                    para = f"<i>{name} non è presente nel gruppo, ma {who_can_deliver.lower()} potranno far arrivare tutto il nostro affetto! 💝</i>"
+                else:
+                    para = f"<i>{name} non è presente nel gruppo, ma riceverà i nostri auguri! 💝</i>"
+            else:
+                # Default fallback
+                para = f"<i>I nostri auguri per {name}! 🎉</i>"
+            
+            paragraphs.append(para)
+        
+        return "\n\n".join(paragraphs)
+
     def _has_comments(self, birthdays: List[Dict[str, Any]]) -> bool:
-        """Check if any birthday has a comment."""
+        """
+        Check if any birthday has a non-empty comment.
+        
+        Args:
+            birthdays: List of birthday dictionaries
+            
+        Returns:
+            True if at least one birthday has a comment
+        """
         return any((b.get('comment') or '').strip() for b in birthdays)
 
     def _get_gender_detector(self):
@@ -390,18 +442,29 @@ Messaggio completo con paragrafo contatti:"""
                     
                     # Step 2: Enrich with contact delivery information if comments exist
                     if self._has_comments(birthdays):
+                        logger.info("Adding contact enrichment step")
                         contacts_info = self._format_comments_info(birthdays)
+                        logger.debug(f"Contacts info: {contacts_info}")
+                        
                         contact_prompt = self._create_contact_enrichment_template()
                         contact_chain = contact_prompt | self.llm | parser
                         
-                        enriched_message = contact_chain.invoke({
-                            "original_message": ai_candidate,
-                            "contacts_info": contacts_info
-                        })
-                        
-                        if enriched_message:
-                            ai_candidate = enriched_message.strip()
-                            logger.info("AI message enriched with contact info (%d chars)", len(ai_candidate))
+                        try:
+                            enriched_message = contact_chain.invoke({
+                                "original_message": ai_candidate,
+                                "contacts_info": contacts_info
+                            })
+                            
+                            if enriched_message:
+                                enriched_message = enriched_message.strip()
+                                ai_candidate = enriched_message
+                                logger.info("AI message enriched with contact info (%d chars)", len(ai_candidate))
+                            else:
+                                logger.warning("Contact enrichment returned empty")
+                        except Exception as e:
+                            logger.error(f"Contact enrichment failed: {e}")
+                    else:
+                        logger.info("No comments to enrich")
                         
             except Exception as exc:
                 logger.error("Error generating AI message: %s", exc)
@@ -417,6 +480,23 @@ Messaggio completo con paragrafo contatti:"""
             return None
 
         final_message = message_body
+
+        # If we have comments and the message doesn't contain contact info, add it
+        if self._has_comments(birthdays):
+            contact_para = self._build_contact_paragraph(birthdays)
+            
+            # Check if enrichment already added contact info by looking for common contact phrases
+            has_contact_info = any(phrase in final_message.lower() for phrase in [
+                'non è presente nel gruppo',
+                'non è nel gruppo',
+                'direttamente nel gruppo',
+                'potranno far arrivare',
+                'riceverà i nostri auguri'
+            ])
+            
+            if not has_contact_info and contact_para:
+                logger.info("Contact info not found in message, adding fallback paragraph")
+                final_message = f"{final_message}\n\n{contact_para}"
 
         if not self._validate_message(final_message):
             if not used_static_template:

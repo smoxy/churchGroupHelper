@@ -70,8 +70,6 @@ I tuoi messaggi devono essere:
 - Calorosi e affettuosi, ma rispettosi
 - Appropriati per l'età e per il genere (maschio/femmina) della persona, adeguando aggettivi e pronomi
 - Integrare ogni testo biblico fornito citando riferimento e significato pastorale
-- Spiegare con chiarezza le NOTE DEL DATABASE (campo "commento"): indicano chi è presente nel gruppo e chi può essere contattato per far arrivare gli auguri
-- Dichiarare esplicitamente chi recapita gli auguri quando la nota lo specifica
 - Brevi e concisi (massimo 200 parole)
 - In italiano corretto e scorrevole
 - Adatti per essere inviati in un gruppo Telegram
@@ -84,9 +82,6 @@ Devi integrare tutti i testi biblici nel messaggio in modo armonioso.""")
 Informazioni sui festeggiati:
 {people_info}
 
-Note operative dal database (INTEGRA QUESTE INFORMAZIONI IN MODO ORGANICO nel messaggio, non aggiungere un blocco separato):
-{comments_info}
-
 Testi biblici da integrare nel messaggio:
 {biblical_texts}
 
@@ -95,12 +90,77 @@ Ricorda:
 - Ogni persona deve avere il SUO testo biblico dedicato
 - Integra i testi in modo naturale nel messaggio
 - Usa un tono appropriato per età e genere
-- Se ci sono note/commenti, TRASFORMA l'informazione in modo narrativo: ad esempio se il commento dice "NO - c'è nonna Claudia" allora vuol dire che nel gruppo la persona non è presente, ma c'è la nonna che potrà far avere gli auguri di tutti quanti, quindi SCRIVI "<NOME DELLA PERSONA> non è presente nel gruppo, ma c'è la nonna Claudia che potrà far arrivare tutto il nostro affetto" o simile - MAI copiare il commento letteralmente
 - Mantieni il messaggio conciso ma significativo
 - Usa HTML per la formattazione: <b>bold</b>, <i>italic</i>, <u>underline</u>
 - Per le interruzioni di riga usa SOLO newline normali (\\n), MAI <br/> o altri tag HTML per line break
 
 Messaggio:"""
+
+        human_message = HumanMessagePromptTemplate.from_template(human_template)
+        return ChatPromptTemplate.from_messages([system_message, human_message])
+    
+    def _create_contact_enrichment_template(self) -> ChatPromptTemplate:
+        """
+        Create prompt template for adding contact delivery information.
+        
+        Returns:
+            ChatPromptTemplate for contact info enrichment
+        """
+        system_message = SystemMessage(content="""Sei un assistente che arricchisce messaggi di auguri con informazioni su chi può recapitare gli auguri.
+
+Il tuo compito è:
+- Leggere il messaggio di auguri già generato
+- Analizzare le note dal database sui contatti
+- Aggiungere UN PARAGRAFO FINALE che spiega in modo narrativo e naturale chi potrà far arrivare gli auguri
+- TRASFORMARE le note tecniche in frasi fluide e calde
+
+IMPORTANTE:
+- "SI" = la persona È presente nel gruppo Telegram, quindi leggerà direttamente gli auguri
+- "NO - [chi c'è]" = la persona NON è nel gruppo, ma c'è qualcuno che farà arrivare gli auguri
+- MAI copiare letteralmente il contenuto delle note
+- Il paragrafo deve essere breve (1-2 frasi) e naturale
+- Usa tono affettuoso e caloroso""")
+        
+        human_template = """Messaggio di auguri già generato:
+{original_message}
+
+Note sui contatti dal database:
+{contacts_info}
+
+Aggiungi un paragrafo finale (separato da riga vuota) che spieghi chi potrà recapitare gli auguri. 
+Analizza la nota e trasformala in una frase narrativa naturale.
+
+ESEMPI DI TRASFORMAZIONE:
+
+1. Nota: "NO - c'è nonna Maria e fratello Luca"
+   → "<i>[Nome] non è presente nel gruppo, ma la nonna Maria e suo fratello Luca potranno far arrivare tutto il nostro affetto! 💝</i>"
+
+2. Nota: "NO- la mamma si"
+   → "<i>[Nome] non è nel gruppo, ma la sua mamma riceverà i nostri auguri e glieli farà avere con tanto amore! 💝</i>"
+
+3. Nota: "NO- c'è il padre" o "NO- c'è la moglie"
+   → "<i>[Nome] non è presente nel gruppo, ma il padre/la moglie farà in modo che riceva tutti i nostri auguri! 💝</i>"
+
+4. Nota: "NO- c'è tutta la famiglia"
+   → "<i>[Nome] non è nel gruppo, ma la sua famiglia riceverà i nostri auguri e glieli farà avere! 💝</i>"
+
+5. Nota: "SI" o "SI con la moglie"
+   → "<i>Ci auguriamo che [Nome] possa leggere i nostri auguri direttamente qui nel gruppo! 🎉</i>"
+
+6. Nota: "NO- il nonno Giovanni" (quando si usa il nome)
+   → "<i>[Nome] non è presente nel gruppo, ma il nonno riceverà i nostri auguri e glieli farà avere con affetto! 💝</i>"
+
+7. Nota: "NO- la zia Gabriella"
+   → "<i>[Nome] non è nel gruppo, ma la zia riceverà i nostri auguri e glieli farà avere! 💝</i>"
+
+REGOLE:
+- Sostituisci sempre [Nome] con il nome vero della persona
+- Se la nota menziona nomi specifici (es. "nonno Giovanni"), usa solo il ruolo generico ("il nonno") nella frase finale
+- Mantieni il tono caloroso e affettuoso
+- Una sola frase in corsivo con emoji finale
+- Se ci sono più persone con note diverse, crea una frase per ognuna
+
+Messaggio completo con paragrafo contatti:"""
 
         human_message = HumanMessagePromptTemplate.from_template(human_template)
         return ChatPromptTemplate.from_messages([system_message, human_message])
@@ -203,13 +263,13 @@ Messaggio:"""
         birthdays: List[Dict[str, Any]]
     ) -> str:
         """
-        Format comment information for the prompt.
+        Format comment information for contact enrichment step.
         
         Args:
             birthdays: List of birthday dictionaries
             
         Returns:
-            Formatted string with comments or empty string
+            Formatted string with contact delivery notes
         """
         comments = []
         for b in birthdays:
@@ -217,17 +277,12 @@ Messaggio:"""
             if not comment:
                 continue
             name = f"{b['first_name']} {b['last_name']}"
-            comments.append(
-                f"- {name}: {comment}\n  (nel messaggio scrivi chi è nel gruppo o chi può consegnare gli auguri)"
-            )
+            comments.append(f"- {name}: {comment}")
         
         if not comments:
-            return "Nessuna nota specifica su presenza o contatti."
+            return "Nessuna nota sui contatti."
         
-        return (
-            "Elenco delle persone nel gruppo da menzionare come contatto per gli auguri:\n" +
-            "\n".join(comments)
-        )
+        return "\n".join(comments)
     
     def _format_biblical_texts(
         self,
@@ -317,21 +372,37 @@ Messaggio:"""
 
         if use_ai:
             try:
+                # Step 1: Generate main birthday message with biblical texts
                 prompt = self._create_prompt_template()
                 people_info = self._format_people_info(birthdays)
-                comments_info = self._format_comments_info(birthdays)
                 biblical_texts_info = self._format_biblical_texts(biblical_texts, birthdays)
 
                 parser = StrOutputParser()
                 chain = prompt | self.llm | parser
                 ai_candidate = chain.invoke({
                     "people_info": people_info,
-                    "comments_info": comments_info,
                     "biblical_texts": biblical_texts_info
                 })
+                
                 if ai_candidate:
                     ai_candidate = ai_candidate.strip()
-                    logger.info("AI candidate generated (%d chars)", len(ai_candidate))
+                    logger.info("AI message generated (%d chars)", len(ai_candidate))
+                    
+                    # Step 2: Enrich with contact delivery information if comments exist
+                    if self._has_comments(birthdays):
+                        contacts_info = self._format_comments_info(birthdays)
+                        contact_prompt = self._create_contact_enrichment_template()
+                        contact_chain = contact_prompt | self.llm | parser
+                        
+                        enriched_message = contact_chain.invoke({
+                            "original_message": ai_candidate,
+                            "contacts_info": contacts_info
+                        })
+                        
+                        if enriched_message:
+                            ai_candidate = enriched_message.strip()
+                            logger.info("AI message enriched with contact info (%d chars)", len(ai_candidate))
+                        
             except Exception as exc:
                 logger.error("Error generating AI message: %s", exc)
 

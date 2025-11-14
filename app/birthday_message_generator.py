@@ -70,8 +70,8 @@ class BirthdayMessageGenerator:
     - Calorosi e affettuosi, ma rispettosi
     - Appropriati per l'età e per il genere (maschio/femmina) della persona, adeguando aggettivi e pronomi
     - Integrare ogni testo biblico fornito citando riferimento e significato pastorale
-    - Spiegare le NOTE DEL DATABASE (campo "commento"): specificano se il festeggiato è nel gruppo e chi può essere contattato per recapitarli gli auguri
-    - Evidenziare quando una persona non è presente nel gruppo e indicare chi può consegnare gli auguri
+    - Spiegare con chiarezza le NOTE DEL DATABASE (campo "commento"): indicano chi è presente nel gruppo e chi può essere contattato per far arrivare gli auguri
+    - Dichiarare esplicitamente chi recapita gli auguri quando la nota lo specifica
     - Brevi e concisi (massimo 200 parole)
     - In italiano corretto e scorrevole
     - Adatti per essere inviati in un gruppo Telegram
@@ -84,7 +84,7 @@ class BirthdayMessageGenerator:
     Informazioni sui festeggiati:
     {people_info}
 
-    Note operative dal database (presenza nel gruppo e contatti):
+    Note operative dal database (presenza nel gruppo e contatti: ripeti questi riferimenti nel messaggio):
     {comments_info}
 
     Testi biblici da integrare nel messaggio:
@@ -95,7 +95,7 @@ class BirthdayMessageGenerator:
     - Ogni persona deve avere il SUO testo biblico dedicato
     - Integra i testi in modo naturale nel messaggio
     - Usa un tono appropriato per età e genere
-    - Se ci sono note/commenti, usali per personalizzare il messaggio e spiegare come raggiungerli
+    - Se ci sono note/commenti, trasforma chiaramente l'informazione in "Nel gruppo c'è..." o "Per recapitare gli auguri rivolgersi a..."
         sections = []
         for text, birthday in zip(biblical_texts, birthdays):
             person_name = f"{birthday['first_name']} {birthday['last_name']}"
@@ -129,6 +129,42 @@ class BirthdayMessageGenerator:
             sections.append("\n".join(section_lines))
         
         return "\n\n".join(sections)
+
+    @staticmethod
+    def _escape_markdown(text: str) -> str:
+        """Escape Markdown V2 special characters for safe Telegram output."""
+        if not text:
+            return ''
+        replacements = ['\\', '_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '!']
+        for char in replacements:
+            text = text.replace(char, f"\\{char}")
+        return text
+
+    def _build_contact_block(self, birthdays: List[Dict[str, Any]]) -> str:
+        """Return formatted lines explaining who can deliver the wishes."""
+        lines = []
+        for b in birthdays:
+            comment = (b.get('comment') or '').strip()
+            if not comment:
+                continue
+            name = f"{b['first_name']} {b['last_name']}".strip()
+            safe_name = self._escape_markdown(name)
+            safe_comment = self._escape_markdown(comment)
+            lines.append(f"• Per {safe_name} rivolgersi a: {safe_comment}")
+        return "\n".join(lines)
+
+    def _attach_contact_info(
+        self,
+        message: str,
+        birthdays: List[Dict[str, Any]]
+    ) -> str:
+        """Append explicit contact information block when comments are present."""
+        contact_block = self._build_contact_block(birthdays)
+        if not contact_block:
+            return message
+        return (
+            f"{message}\n\n📞 *Chi recapita gli auguri:*\n{contact_block}"
+        )
         """Lazily load gender detector if available."""
         if self._gender_detector_unavailable:
             return None
@@ -221,14 +257,14 @@ class BirthdayMessageGenerator:
                 continue
             name = f"{b['first_name']} {b['last_name']}"
             comments.append(
-                f"- {name}: {comment}\n  (usa queste indicazioni per capire se è nel gruppo e chi può fargli arrivare gli auguri)"
+                f"- {name}: {comment}\n  (nel messaggio scrivi chi è nel gruppo o chi può consegnare gli auguri)"
             )
         
         if not comments:
             return "Nessuna nota specifica su presenza o contatti."
         
         return (
-            "Note su presenza nel gruppo e contatti utili:\n" +
+            "Elenco delle persone nel gruppo da menzionare come contatto per gli auguri:\n" +
             "\n".join(comments)
         )
     
@@ -289,36 +325,39 @@ class BirthdayMessageGenerator:
         if not use_ai:
             return self._generate_static_template(birthdays, biblical_texts)
         
-        try:
-            # Create prompt
-            prompt = self._create_prompt_template()
-            
-            # Format input data
-            people_info = self._format_people_info(birthdays)
-            comments_info = self._format_comments_info(birthdays)
-            biblical_texts_info = self._format_biblical_texts(biblical_texts, birthdays)
-            
-            # Generate message using AI
-            parser = StrOutputParser()
-            chain = prompt | self.llm | parser
-            message = chain.invoke({
-                "people_info": people_info,
-                "comments_info": comments_info,
-                "biblical_texts": biblical_texts_info
-            }).strip()
-            
-            # Validate message
-            if not self._validate_message(message):
-                logger.warning("AI-generated message failed validation, using static template")
-                return self._generate_static_template(birthdays, biblical_texts)
-            
-            logger.info(f"Successfully generated AI message ({len(message)} chars)")
-            return message
-            
-        except Exception as e:
-            logger.error(f"Error generating AI message: {e}")
-            logger.info("Falling back to static template")
-            return self._generate_static_template(birthdays, biblical_texts)
+        message = None
+
+        if use_ai:
+            try:
+                prompt = self._create_prompt_template()
+                people_info = self._format_people_info(birthdays)
+                comments_info = self._format_comments_info(birthdays)
+                biblical_texts_info = self._format_biblical_texts(biblical_texts, birthdays)
+
+                parser = StrOutputParser()
+                chain = prompt | self.llm | parser
+                candidate = chain.invoke({
+                    "people_info": people_info,
+                    "comments_info": comments_info,
+                    "biblical_texts": biblical_texts_info
+                }).strip()
+
+                if self._validate_message(candidate):
+                    message = candidate
+                    logger.info(f"Successfully generated AI message ({len(message)} chars)")
+                else:
+                    logger.warning("AI-generated message failed validation, using static template")
+            except Exception as e:
+                logger.error(f"Error generating AI message: {e}")
+                logger.info("Falling back to static template")
+
+        if not message:
+            message = self._generate_static_template(birthdays, biblical_texts)
+
+        if not message:
+            return None
+
+        return self._attach_contact_info(message, birthdays)
     
     def _validate_message(self, message: str) -> bool:
         """

@@ -485,7 +485,7 @@ Nome: {name}"""
                     sent_message = await self.bot.send_message(
                         chat_id=group_id,
                         text=message,
-                        parse_mode='Markdown'
+                        parse_mode='HTML'
                     )
                     
                     logger.info(f"[BIRTHDAY_SCHEDULER] Fallback message sent successfully (telegram_msg_id: {sent_message.message_id})")
@@ -580,7 +580,7 @@ Nome: {name}"""
                 sent_message = await self.bot.send_message(
                     chat_id=group_id,
                     text=message,
-                    parse_mode='Markdown'  # For mentions to work
+                    parse_mode='HTML'
                 )
                 
                 logger.info(f"[BIRTHDAY_SCHEDULER] Message sent to Telegram successfully (telegram_msg_id: {sent_message.message_id})")

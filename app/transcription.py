@@ -30,17 +30,11 @@ class Transcriber:
             logger.info("Transcription improvement will be disabled")
 
     def valid_languages(self):
-        # Lista delle lingue supportate da Whisper
+        # The 25 European languages supported by nvidia/parakeet-tdt-0.6b-v3.
         return [
-            "af", "am", "ar", "as", "az", "ba", "be", "bg", "bn", "bo", "br", "bs",
-            "ca", "cs", "cy", "da", "de", "el", "en", "es", "et", "eu", "fa", "fi",
-            "fo", "fr", "gl", "gu", "ha", "haw", "he", "hi", "hr", "ht", "hu", "hy",
-            "id", "is", "it", "ja", "jw", "ka", "kk", "km", "kn", "ko", "la", "lb",
-            "ln", "lo", "lt", "lv", "mg", "mi", "mk", "ml", "mn", "mr", "ms", "mt",
-            "my", "ne", "nl", "nn", "no", "oc", "pa", "pl", "ps", "pt", "ro", "ru",
-            "sa", "sd", "si", "sk", "sl", "sn", "so", "sq", "sr", "su", "sv", "sw",
-            "ta", "te", "tg", "th", "tk", "tl", "tr", "tt", "uk", "ur", "uz", "vi",
-            "yi", "yo", "yue", "zh"
+            "bg", "cs", "da", "de", "el", "en", "es", "et", "fi", "fr",
+            "hr", "hu", "it", "lt", "lv", "mt", "nl", "pl", "pt", "ro",
+            "ru", "sk", "sl", "sv", "uk",
         ]
 
     def identify_language(self, file_path) -> tuple:
@@ -105,11 +99,11 @@ class Transcriber:
             return "", False
 
         # Transcribe audio using external service with retry logic
-        # The Whisper container unloads the model from VRAM after 2 minutes of inactivity
-        # It needs time to reload the model when a new request arrives
+        # The Parakeet ASR container unloads the model from VRAM after IDLE_TIMEOUT
+        # (default 5 min) of inactivity. It needs time to reload the model on a new request.
         max_retries = 7
         retry_delay = 5  # seconds between retries
-        url = f"{self.service_url}/asr"
+        url = f"{self.service_url}/transcribe"
         
         for attempt in range(1, max_retries + 1):
             try:
@@ -118,33 +112,35 @@ class Transcriber:
                 
                 with open(file_path, 'rb') as audio_file:
                     files = {'audio_file': audio_file}
-                    params = {
-                        'encode': 'true',
-                        'task': 'transcribe',
-                        'language': language,
-                        'output': 'txt'
-                    }
-                    
+                    # Parakeet v3 auto-detects the language; we still send it for
+                    # logging/compatibility and reuse it later for the improver.
+                    params = {'language': language}
+
                     start_time = time.time()
                     response = requests.post(url, files=files, params=params, timeout=300)
                     elapsed_time = time.time() - start_time
-                    
+
                     logger.info(f"[Attempt {attempt}/{max_retries}] Response received in {elapsed_time:.2f}s - Status code: {response.status_code}")
-                    
+
                     response.raise_for_status()
-                    
-                    # Il servizio restituisce il testo direttamente quando output=txt
-                    transcription = response.text.strip()
-                    
-                    logger.info(f"[Attempt {attempt}/{max_retries}] Transcription successful - Length: {len(transcription)} characters")
-                    
+
+                    # The Parakeet service returns JSON: {"text": ..., "language": ..., "empty": bool}
+                    data = response.json()
+                    transcription = (data.get('text') or '').strip()
+                    # Language auto-detected by the service from the transcribed text;
+                    # use it for the improver so it matches the actually-spoken language
+                    # (falls back to the requested language if detection was inconclusive).
+                    detected_language = data.get('language') or language
+
+                    logger.info(f"[Attempt {attempt}/{max_retries}] Transcription successful - Length: {len(transcription)} characters (detected language: {detected_language})")
+
                     # Improve transcription quality if improver is available
                     if self.improver and transcription:
                         try:
                             logger.info("Improving transcription quality with LangChain pipeline...")
                             logger.debug(f"Original transcription preview (first 200 chars): {transcription[:200]}")
-                            
-                            improved_transcription = self.improver.improve(transcription, language)
+
+                            improved_transcription = self.improver.improve(transcription, detected_language)
                             
                             logger.debug(f"Returned improved_transcription type: {type(improved_transcription)}")
                             logger.debug(f"Returned improved_transcription length: {len(improved_transcription) if improved_transcription else 0}")

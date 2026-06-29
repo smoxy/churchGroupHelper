@@ -20,12 +20,12 @@ TOKEN = os.getenv('TOKEN')
 # Admin IDs
 ADMINS = [int(admin) for admin in os.getenv('ADMINS').split(',')]
 
-# Whisper service configuration
-WHISPER_SERVICE_HOST = os.getenv('WHISPER_SERVICE_HOST', 'whisper')
+# ASR service configuration (Parakeet container; env var names kept for compatibility)
+WHISPER_SERVICE_HOST = os.getenv('WHISPER_SERVICE_HOST', 'parakeet')
 WHISPER_SERVICE_PORT = os.getenv('WHISPER_SERVICE_PORT', '9000')
 WHISPER_SERVICE_URI = os.getenv('WHISPER_SERVICE_URI', '')
 
-# Construct base URL for Whisper service
+# Construct base URL for the ASR service
 if WHISPER_SERVICE_URI:
     WHISPER_SERVICE_URL = f"{WHISPER_SERVICE_URI.rstrip('/')}"
 else:
